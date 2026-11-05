@@ -4,14 +4,17 @@ Guidance for agents working in this repo.
 
 ## Commands
 
+Tasks are defined in `[tool.poe.tasks]` in `pyproject.toml`. `uv run poe` lists them.
+
 - Install and sync: `uv sync`
-- Lint: `uv run ruff check`
-- Format check: `uv run ruff format --check`
-- Types: `uv run basedpyright`
-- Tests: `uv run pytest`
+- Lint: `uv run poe lint`
+- Format check: `uv run poe format-check`
+- Types: `uv run poe types`
+- Tests: `uv run poe test`
+- All of the above: `uv run poe check`
 - CLI help: `uv run review-watcher --help`
 
-All four checks must pass clean before a change is done. `uv run poe check` runs them in order.
+All four checks must pass clean before a change is done. Do not run `poe kick`, `poe install-agent`, or `poe uninstall-agent`; they act on the user's live LaunchAgent.
 
 ## Conventions
 

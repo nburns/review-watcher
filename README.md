@@ -31,6 +31,18 @@ Then grant notification permission to terminal-notifier in System Settings > Not
 
 Global options: `--config PATH`, `--dry-run` (no posting, prints the review JSON for `review`), `--no-llm` (skip claude), `--verbose`.
 
+## Development
+
+Tasks live in `[tool.poe.tasks]` in `pyproject.toml`; `uv run poe` lists them.
+
+| Task | Purpose |
+| --- | --- |
+| `setup` | `brew bundle`, then create `config.toml` from the example if missing |
+| `install-agent` / `uninstall-agent` | Manage the LaunchAgent |
+| `kick` | Run one launchd cycle now |
+| `check` | Lint, format check, type check, and tests |
+| `lint`, `format-check`, `types`, `test` | Each check on its own |
+
 ## Security model
 
 - The `claude` CLI runs in a PR worktree with `--restricted --strict-mcp-config --setting-sources "" --disable-slash-commands --no-session-persistence`. Its tools are read-only (`Read,Grep,Glob`). It loads no settings, hooks, MCP servers, or slash commands from the repo. `--bare` is never used because it breaks keychain auth.
