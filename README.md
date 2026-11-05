@@ -9,15 +9,13 @@ The LLM is used only for the review step. Discovery, diffing, guidance collectio
 ## Setup
 
 ```sh
-brew bundle                      # terminal-notifier, gh, uv
-uv sync                          # creates .venv and installs dependencies
-cp config.example.toml config.toml
+uv run poe setup                 # brew bundle, then config.toml from the example if missing
 $EDITOR config.toml              # set github_login and repos
 uv run review-watcher --dry-run review https://github.com/owner/name/pull/1
-review-watcher install-agent     # or: uv run review-watcher install-agent
+uv run poe install-agent
 ```
 
-Then grant notification permission to terminal-notifier in System Settings > Notifications. Use `launchctl kickstart -k gui/$(id -u)/com.nburns.review-watcher` to run a cycle immediately and check `var/logs/`.
+Then grant notification permission to terminal-notifier in System Settings > Notifications. Use `uv run poe kick` to run a cycle immediately and check `var/logs/`. `uv run poe` lists all tasks.
 
 `install-agent` checks that `.venv/bin/review-watcher`, `terminal-notifier`, and SSH access to the first allowlisted repo all work, then writes `~/Library/LaunchAgents/com.nburns.review-watcher.plist` and loads it.
 

@@ -11,7 +11,7 @@ Guidance for agents working in this repo.
 - Tests: `uv run pytest`
 - CLI help: `uv run review-watcher --help`
 
-All four checks must pass clean before a change is done.
+All four checks must pass clean before a change is done. `uv run poe check` runs them in order.
 
 ## Conventions
 
