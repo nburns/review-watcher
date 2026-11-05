@@ -1,0 +1,51 @@
+[project]
+name = "review-watcher"
+version = "0.1.0"
+description = "Reviews GitHub PRs where review is requested and posts pending reviews"
+readme = "README.md"
+license = "BSD-3-Clause"
+license-files = ["LICENSE"]
+requires-python = ">=3.13"
+dependencies = [
+    "pydantic>=2.14.2",
+    "typer>=0.27.3",
+    "unidiff>=1.0.1",
+]
+
+[project.scripts]
+review-watcher = "review_watcher.cli:main"
+
+[build-system]
+requires = ["uv_build>=0.11.8,<0.12.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "basedpyright>=1.40.2",
+    "pre-commit>=4.7.0",
+    "pytest>=9.2.0",
+    "pytest-asyncio>=1.4.1.post1",
+    "ruff>=0.17.3",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py313"
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM", "RUF", "ASYNC", "S", "PTH", "TRY", "PL"]
+ignore = ["S603", "S607", "PLR0913", "PLR2004", "TRY003"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101", "PLR2004", "PLR0915"]
+
+[tool.basedpyright]
+pythonVersion = "3.13"
+typeCheckingMode = "strict"
+include = ["src", "tests"]

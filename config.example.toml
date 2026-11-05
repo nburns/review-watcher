@@ -1,0 +1,77 @@
+# Copy to config.toml and edit. Relative paths resolve against the directory holding config.toml.
+
+github_login = "your-github-login"
+# Only PRs in these repos are considered. Empty lists are rejected.
+repos = ["owner/name"]
+
+include_team_requests = true   # false: only direct review requests (user-review-requested)
+skip_drafts = true
+interval_minutes = 5           # launchd StartInterval; minimum 2
+debounce_minutes = 5           # wait this long after a new head SHA is first seen
+concurrency = 2
+existing_pending_policy = "skip"   # "skip" or "replace" (replace only deletes pending reviews with our marker)
+rereview_on_push = true        # false: review each PR once, ignore later pushes
+max_attempts = 3               # failed reviews are retried up to this many times
+sensitive_paths = [
+    "**/migrations/**",
+    "**/auth/**",
+    "**/*secret*",
+]
+
+[reviewer]
+backend = "claude_cli"
+model = "opus"
+effort = "medium"
+timeout_s = 600
+max_inline_comments = 10
+max_diff_bytes = 200000
+
+[guidance]
+extra_paths = []
+max_file_bytes = 60000
+max_total_bytes = 200000
+
+[guidance_watch]
+# Defaults shown; override only to change what counts as review or agent configuration.
+review_guidance = [
+    ".claude/skills/**",
+    ".claude/commands/**",
+    ".claude/agents/**",
+    "**/AGENTS.md",
+    "**/CLAUDE.md",
+    "**/CLAUDE.local.md",
+    "CONTRIBUTING*",
+    "REVIEWING*",
+    "docs/**/*review*",
+    ".github/PULL_REQUEST_TEMPLATE*",
+    ".github/copilot-instructions.md",
+    ".cursor/rules/**",
+    "CODEOWNERS",
+    ".github/CODEOWNERS",
+]
+agent_execution_config = [
+    ".claude/settings*.json",
+    ".claude/hooks/**",
+    ".mcp.json",
+    "**/.mcp.json",
+    ".claude/**/*.sh",
+    ".gitattributes",
+    ".gitmodules",
+    ".lfsconfig",
+    ".githooks/**",
+    ".envrc",
+]
+
+[feedback]
+# Notify about new reviews and comments from others on your own open PRs in `repos`.
+# Feedback from before the first run is treated as already seen.
+enabled = true
+ignore_authors = []            # e.g. ["Copilot", "copilot-pull-request-reviewer[bot]"]
+quiet_minutes = 5              # notify once a PR has had no new feedback for this long
+max_wait_minutes = 30          # but never hold feedback longer than this
+
+[notifier]
+backend = "terminal_notifier"  # or "osascript" (no click-through, logs the URL)
+
+[paths]
+var_dir = "var"
