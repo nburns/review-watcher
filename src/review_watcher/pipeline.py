@@ -10,6 +10,7 @@ from review_watcher.diffmap import parse_diff
 from review_watcher.github import GitHubClient
 from review_watcher.guidance import collect_guidance
 from review_watcher.guidance_changes import collect_guidance_changes
+from review_watcher.logging_setup import log_step
 from review_watcher.models import (
     FinalReview,
     PullRequestRef,
@@ -26,6 +27,7 @@ from review_watcher.state import ReviewRecord, ReviewStatus, StateStore
 
 logger = logging.getLogger(__name__)
 ERROR_TITLE = "review-watcher failed"
+DEADLINE_CANCEL_ERROR = "review cancelled by the run deadline"
 PENDING_STATE = "PENDING"
 SKIP_STATUSES = (ReviewStatus.POSTED, ReviewStatus.SKIPPED_EXISTING_PENDING)
 TIMEOUT_BACKOFF_CAP = timedelta(hours=4)
@@ -119,6 +121,11 @@ class Pipeline:
                 timed_out = isinstance(exc, CommandTimeout)
                 await self._record_failure(pr, str(exc), timed_out=timed_out)
                 return RunOutcome(slug=pr.slug, action=Action.FAILED, error=str(exc))
+            except asyncio.CancelledError:
+                # Without a record, a review that overruns the deadline restarts every cycle.
+                logger.warning("pr_cancelled pr=%s", pr.slug)
+                self._save_failure(pr, DEADLINE_CANCEL_ERROR, timed_out=True)
+                raise
 
     async def _process(self, pr: PullRequestRef, *, force: bool, debounce: bool) -> RunOutcome:
         config = self._config
@@ -198,15 +205,18 @@ class Pipeline:
 
     async def _build_review(self, pr: PullRequestRef) -> FinalReview:
         config = self._config
-        diff_text = await self._github.get_diff(pr)
+        with log_step(logger, pr.slug, "diff"):
+            diff_text = await self._github.get_diff(pr)
         diff = parse_diff(diff_text)
         async with self._repos.worktree(pr) as worktree:
-            guidance_changes = await collect_guidance_changes(
-                self._repos, pr, diff, config.guidance_watch
-            )
-            guidance = await collect_guidance(self._repos, pr, diff, config.guidance)
+            with log_step(logger, pr.slug, "guidance"):
+                guidance_changes = await collect_guidance_changes(
+                    self._repos, pr, diff, config.guidance_watch
+                )
+                guidance = await collect_guidance(self._repos, pr, diff, config.guidance)
             clipped, truncated = _clip_diff(diff_text, config.reviewer.max_diff_bytes)
-            stack = await self._stack_context(pr) if pr.is_stacked else None
+            with log_step(logger, pr.slug, "stack"):
+                stack = await self._stack_context(pr) if pr.is_stacked else None
             ctx = ReviewContext(
                 pr=pr,
                 diff_text=clipped,
@@ -218,7 +228,8 @@ class Pipeline:
                 max_inline_comments=config.reviewer.max_inline_comments,
                 stack=stack,
             )
-            draft = await self._reviewer.review(ctx)
+            with log_step(logger, pr.slug, "llm"):
+                draft = await self._reviewer.review(ctx)
         return finalize(
             draft=draft,
             ctx=ctx,
@@ -337,6 +348,19 @@ class Pipeline:
         )
 
     async def _record_failure(self, pr: PullRequestRef, error: str, *, timed_out: bool) -> None:
+        self._save_failure(pr, error, timed_out=timed_out)
+        short = error.splitlines()[0][:200] if error else "unknown error"
+        if self._state.should_notify_error(pr.slug, short):
+            await self._notify(
+                Notification(
+                    title=ERROR_TITLE,
+                    message=f"{pr.slug}: {short}",
+                    group=pr.slug,
+                    open_url=pr.url,
+                )
+            )
+
+    def _save_failure(self, pr: PullRequestRef, error: str, *, timed_out: bool) -> None:
         now = self._clock()
         previous = self._state.get(pr.full_name, pr.number, pr.head_sha)
         base = previous or self._new_record(pr, ReviewStatus.FAILED, now)
@@ -359,16 +383,6 @@ class Pipeline:
                 updated_at=now,
             )
         )
-        short = error.splitlines()[0][:200] if error else "unknown error"
-        if self._state.should_notify_error(pr.slug, short):
-            await self._notify(
-                Notification(
-                    title=ERROR_TITLE,
-                    message=f"{pr.slug}: {short}",
-                    group=pr.slug,
-                    open_url=pr.url,
-                )
-            )
 
     async def _notify(self, notification: Notification) -> None:
         await notify_logging_failures(self._notifier, notification)

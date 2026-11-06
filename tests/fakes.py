@@ -1,3 +1,4 @@
+import asyncio
 import shutil
 import subprocess
 from collections.abc import Sequence
@@ -70,6 +71,7 @@ class FakeReviewer:
     draft: ReviewDraft
     fail_for: set[int] = field(default_factory=set)
     timeout_for: set[int] = field(default_factory=set)
+    hang_for: set[int] = field(default_factory=set)
     contexts: list[ReviewContext] = field(default_factory=list)
 
     async def review(self, ctx: ReviewContext) -> ReviewDraft:
@@ -78,6 +80,8 @@ class FakeReviewer:
             raise RuntimeError("model backend exploded")
         if ctx.pr.number in self.timeout_for:
             raise CommandTimeout(["slow-tool"], 1.0)
+        if ctx.pr.number in self.hang_for:
+            await asyncio.Event().wait()
         return self.draft
 
 

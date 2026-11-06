@@ -1,12 +1,35 @@
+import asyncio
 import logging
 import sys
 import time
+from collections.abc import Generator
+from contextlib import contextmanager
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 LOGGER_NAME = "review_watcher"
 _LOG_FILE_NAME = "review-watcher.log"
 _FORMAT = "ts=%(asctime)sZ level=%(levelname)s logger=%(name)s msg=%(message)s"
+
+
+@contextmanager
+def log_step(logger: logging.Logger, slug: str, step: str) -> Generator[None]:
+    start = time.monotonic()
+    outcome = "error"
+    try:
+        yield
+        outcome = "ok"
+    except asyncio.CancelledError:
+        outcome = "cancelled"
+        raise
+    finally:
+        logger.info(
+            "step_timing pr=%s step=%s seconds=%.1f outcome=%s",
+            slug,
+            step,
+            time.monotonic() - start,
+            outcome,
+        )
 
 
 def configure_logging(log_dir: Path, *, verbose: bool) -> None:

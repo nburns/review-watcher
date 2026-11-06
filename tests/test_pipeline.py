@@ -1,6 +1,9 @@
+import asyncio
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+
+import pytest
 
 from review_watcher.config import Config
 from review_watcher.models import ReviewSummary
@@ -260,3 +263,21 @@ async def test_stacked_pr_gets_full_default_branch_diff_as_context(tmp_path: Pat
     assert "src/lower.py" in ctx.stack.diff_text
     assert "src/upper.py" in ctx.stack.diff_text
     assert "Stacked PR: merges into `feature-1` on top of #1" in github.created[0].body
+
+
+async def test_review_cancelled_by_run_deadline_backs_off(tmp_path: Path) -> None:
+    world = _world(tmp_path)
+    world.reviewer.hang_for = {1}
+    config = make_config(interval_minutes=10)
+
+    with pytest.raises(TimeoutError):
+        async with asyncio.timeout(0.5):
+            await world.pipeline(config).run()
+    summary = await world.pipeline(config).run()
+
+    assert summary.outcomes[0].action == Action.TIMEOUT_BACKOFF
+    record = world.state.get("acme/app", 1, world.head)
+    assert record is not None
+    assert record.status == ReviewStatus.FAILED
+    assert record.timeouts == 1
+    assert record.attempts == 0

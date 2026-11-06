@@ -1,10 +1,12 @@
 import asyncio
+import logging
 import shutil
 from collections.abc import AsyncGenerator, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
+from review_watcher.logging_setup import log_step
 from review_watcher.models import PullRequestRef
 from review_watcher.proc import CommandResult, base_env, run_command
 
@@ -20,6 +22,9 @@ _GIT_HARDENING: tuple[str, ...] = (
 _GIT_ENV_EXTRA: Mapping[str, str] = {"GIT_LFS_SKIP_SMUDGE": "1"}
 _SYMLINK_MODE = "120000"
 _SUBMODULE_MODE = "160000"
+
+
+logger = logging.getLogger(__name__)
 
 
 class GitError(RuntimeError):
@@ -93,13 +98,16 @@ class RepoCache:
 
     @asynccontextmanager
     async def worktree(self, pr: PullRequestRef) -> AsyncGenerator[Path]:
-        await self.ensure_fetched(pr)
+        with log_step(logger, pr.slug, "fetch"):
+            await self.ensure_fetched(pr)
         path = self._worktree_root / f"{pr.owner}-{pr.repo}-{pr.number}-{pr.head_sha[:12]}"
-        async with self._lock_for(pr):
-            # Double force overrides a stale locked registration left by a killed add.
-            await self._git_bare(
-                pr, ["worktree", "add", "--force", "--force", "--detach", str(path), pr.head_sha]
-            )
+        with log_step(logger, pr.slug, "worktree_add"):
+            async with self._lock_for(pr):
+                # Double force overrides a stale locked registration left by a killed add.
+                await self._git_bare(
+                    pr,
+                    ["worktree", "add", "--force", "--force", "--detach", str(path), pr.head_sha],
+                )
         try:
             yield path
         finally:
