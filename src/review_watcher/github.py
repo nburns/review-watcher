@@ -39,10 +39,11 @@ query($q: String!) {
         title
         isDraft
         headRefOid
+        headRefName
         baseRefName
         baseRefOid
         author { login }
-        repository { nameWithOwner owner { login } name }
+        repository { nameWithOwner owner { login } name defaultBranchRef { name } }
       }
     }
   }
@@ -64,6 +65,10 @@ class GitHubClient(Protocol):
     async def list_feedback(self, pr: PullRequestRef) -> list[FeedbackItem]: ...
 
     async def fetch_pull_request(self, owner: str, repo: str, number: int) -> PullRequestRef: ...
+
+    async def list_open_prs_with_head(
+        self, owner: str, repo: str, branch: str
+    ) -> list[PullRequestRef]: ...
 
     async def get_diff(self, pr: PullRequestRef) -> str: ...
 
@@ -199,18 +204,23 @@ class GhCliGitHub:
 
     async def fetch_pull_request(self, owner: str, repo: str, number: int) -> PullRequestRef:
         data = await self._api_json([f"repos/{owner}/{repo}/pulls/{number}"])
-        return PullRequestRef(
-            owner=owner,
-            repo=repo,
-            number=number,
-            head_sha=data["head"]["sha"],
-            base_ref=data["base"]["ref"],
-            base_sha=data["base"]["sha"],
-            url=data["html_url"],
-            title=data["title"],
-            author=data["user"]["login"],
-            is_draft=data["draft"],
+        return _pr_from_rest(data, owner, repo)
+
+    async def list_open_prs_with_head(
+        self, owner: str, repo: str, branch: str
+    ) -> list[PullRequestRef]:
+        items = await self._api_pages(
+            [
+                f"repos/{owner}/{repo}/pulls",
+                "--method",
+                "GET",
+                "-f",
+                "state=open",
+                "-f",
+                f"head={owner}:{branch}",
+            ]
         )
+        return [_pr_from_rest(item, owner, repo) for item in items]
 
     async def get_diff(self, pr: PullRequestRef) -> str:
         raw = await self._gh_run(
@@ -291,6 +301,23 @@ def _login(user: dict[str, Any] | None) -> str:
     return "ghost" if user is None else user["login"]
 
 
+def _pr_from_rest(data: dict[str, Any], owner: str, repo: str) -> PullRequestRef:
+    return PullRequestRef(
+        owner=owner,
+        repo=repo,
+        number=data["number"],
+        head_sha=data["head"]["sha"],
+        head_ref=data["head"]["ref"],
+        base_ref=data["base"]["ref"],
+        base_sha=data["base"]["sha"],
+        default_branch=data["base"]["repo"]["default_branch"],
+        url=data["html_url"],
+        title=data["title"],
+        author=_login(data["user"]),
+        is_draft=data["draft"],
+    )
+
+
 def _pr_from_search_node(node: dict[str, Any]) -> PullRequestRef:
     repository = node["repository"]
     author = _login(node["author"])
@@ -299,8 +326,10 @@ def _pr_from_search_node(node: dict[str, Any]) -> PullRequestRef:
         repo=repository["name"],
         number=node["number"],
         head_sha=node["headRefOid"],
+        head_ref=node["headRefName"],
         base_ref=node["baseRefName"],
         base_sha=node["baseRefOid"],
+        default_branch=repository["defaultBranchRef"]["name"],
         url=node["url"],
         title=node["title"],
         author=author,

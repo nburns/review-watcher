@@ -178,6 +178,7 @@ class ClaudeCliReviewer:
             head_sha=ctx.pr.head_sha,
             nonce=nonce,
             max_inline_comments=ctx.max_inline_comments,
+            stacked=ctx.stack is not None,
         )
         argv = build_claude_argv(
             binary=self._binary,

@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
-from review_watcher.proc import CommandFailed, base_env, run_command
+from review_watcher.proc import CommandFailed, CommandTimeout, base_env, run_command
 
 NOTIFY_TIMEOUT_S = 20.0
 logger = logging.getLogger(__name__)
@@ -80,7 +80,7 @@ async def notify_logging_failures(notifier: Notifier, notification: Notification
     """A failed notification is logged, not raised, so it never aborts review or state work."""
     try:
         await notifier.notify(notification)
-    except (OSError, CommandFailed, TimeoutError):
+    except (OSError, CommandFailed, CommandTimeout, TimeoutError):
         logger.exception("notification_failed title=%s", notification.title)
 
 

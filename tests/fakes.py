@@ -15,6 +15,7 @@ from review_watcher.models import (
     ReviewSummary,
 )
 from review_watcher.notifier import Notification
+from review_watcher.proc import CommandTimeout
 from review_watcher.repo_cache import RepoCache
 
 GIT = shutil.which("git") or "git"
@@ -29,6 +30,7 @@ class FakeGitHub:
         self.reviews: dict[int, list[ReviewSummary]] = {}
         self.authored: list[PullRequestRef] = []
         self.feedback: dict[int, list[FeedbackItem]] = {}
+        self.open_by_head: dict[str, list[PullRequestRef]] = {}
 
     async def search_review_requests(
         self, login: str, repos: Sequence[str], include_team_requests: bool
@@ -43,6 +45,11 @@ class FakeGitHub:
 
     async def fetch_pull_request(self, owner: str, repo: str, number: int) -> PullRequestRef:
         raise NotImplementedError
+
+    async def list_open_prs_with_head(
+        self, owner: str, repo: str, branch: str
+    ) -> list[PullRequestRef]:
+        return list(self.open_by_head.get(branch, []))
 
     async def get_diff(self, pr: PullRequestRef) -> str:
         return self.diff_text
@@ -62,12 +69,15 @@ class FakeGitHub:
 class FakeReviewer:
     draft: ReviewDraft
     fail_for: set[int] = field(default_factory=set)
+    timeout_for: set[int] = field(default_factory=set)
     contexts: list[ReviewContext] = field(default_factory=list)
 
     async def review(self, ctx: ReviewContext) -> ReviewDraft:
         self.contexts.append(ctx)
         if ctx.pr.number in self.fail_for:
             raise RuntimeError("model backend exploded")
+        if ctx.pr.number in self.timeout_for:
+            raise CommandTimeout(["slow-tool"], 1.0)
         return self.draft
 
 
@@ -142,14 +152,24 @@ def diff_between(repo: LocalRepo, base: str, head: str) -> str:
     return git(repo.bare, "diff", "--no-color", f"{base}...{head}") + "\n"
 
 
-def make_pr(number: int, head_sha: str, base_sha: str, *, is_draft: bool = False) -> PullRequestRef:
+def make_pr(
+    number: int,
+    head_sha: str,
+    base_sha: str,
+    *,
+    is_draft: bool = False,
+    head_ref: str | None = None,
+    base_ref: str = "main",
+) -> PullRequestRef:
     return PullRequestRef(
         owner="acme",
         repo="app",
         number=number,
         head_sha=head_sha,
-        base_ref="main",
+        head_ref=head_ref if head_ref is not None else f"feature-{number}",
+        base_ref=base_ref,
         base_sha=base_sha,
+        default_branch="main",
         url=f"https://github.com/acme/app/pull/{number}",
         title=f"PR {number}",
         author="octocat",

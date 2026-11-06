@@ -58,6 +58,7 @@ def _ctx(max_inline: int = 10, changed: tuple[str, ...] = ("src/app.py",)) -> Re
         guidance=ReviewGuidance(files=[], omitted_paths=[]),
         guidance_changes=GuidanceChanges(changes=[]),
         max_inline_comments=max_inline,
+        stack=None,
     )
 
 

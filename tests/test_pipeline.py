@@ -16,6 +16,7 @@ from tests.fakes import (
     commit_files,
     diff_between,
     empty_draft,
+    git,
     make_config,
     make_local_repo,
     make_pr,
@@ -194,3 +195,68 @@ async def test_guidance_change_adds_banner_floor_and_title(tmp_path: Path) -> No
     record = world.state.get("acme/app", 1, world.head)
     assert record is not None
     assert record.guidance_changed
+
+
+async def test_timeouts_back_off_exponentially_and_never_exhaust_retries(
+    tmp_path: Path,
+) -> None:
+    world = _world(tmp_path)
+    world.reviewer.timeout_for = {1}
+    config = make_config(max_attempts=1, interval_minutes=10)
+    actions: list[Action] = []
+
+    for _ in range(5):
+        summary = await world.pipeline(config).run()
+        actions.append(summary.outcomes[0].action)
+        world.clock.now += timedelta(minutes=10)
+
+    assert actions == [
+        Action.FAILED,
+        Action.FAILED,
+        Action.TIMEOUT_BACKOFF,
+        Action.FAILED,
+        Action.TIMEOUT_BACKOFF,
+    ]
+    record = world.state.get("acme/app", 1, world.head)
+    assert record is not None
+    assert record.attempts == 0
+    assert record.timeouts == 3
+
+
+async def test_stacked_pr_gets_full_default_branch_diff_as_context(tmp_path: Path) -> None:
+    repo = make_local_repo(tmp_path)
+    (tmp_path / "wt").mkdir()
+    base = commit_files(repo, BASE_FILES)
+    publish(repo)
+    parent_head = commit_files(repo, {**BASE_FILES, "src/lower.py": "lower = 1\n"})
+    head = commit_files(
+        repo, {**BASE_FILES, "src/lower.py": "lower = 1\n", "src/upper.py": "upper = 2\n"}
+    )
+    git(repo.work, "push", "-q", str(repo.bare), "HEAD:refs/heads/feature-2")
+    git(repo.bare, "update-ref", "refs/rw/base/main", base)
+    parent = make_pr(1, parent_head, base, head_ref="feature-1")
+    pr = make_pr(2, head, parent_head, head_ref="feature-2", base_ref="feature-1")
+    clock = Clock(now=datetime(2026, 11, 5, 12, 0, tzinfo=UTC))
+    github = FakeGitHub([pr], diff_between(repo, parent_head, head))
+    github.open_by_head["feature-1"] = [parent]
+    world = World(
+        repo=repo,
+        base=base,
+        head=head,
+        clock=clock,
+        state=StateStore(tmp_path / "state.db", clock=clock),
+        notifier=FakeNotifier(),
+        reviewer=FakeReviewer(draft=empty_draft()),
+        github=github,
+    )
+
+    await world.pipeline(make_config()).run()
+
+    ctx = world.reviewer.contexts[0]
+    assert "src/upper.py" in ctx.diff_text
+    assert "src/lower.py" not in ctx.diff_text
+    assert ctx.stack is not None
+    assert [ancestor.number for ancestor in ctx.stack.ancestors] == [1]
+    assert "src/lower.py" in ctx.stack.diff_text
+    assert "src/upper.py" in ctx.stack.diff_text
+    assert "Stacked PR: merges into `feature-1` on top of #1" in github.created[0].body

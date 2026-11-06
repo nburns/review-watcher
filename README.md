@@ -4,6 +4,8 @@ A macOS tool that runs every few minutes under launchd. It finds open GitHub PRs
 
 It also watches your own open PRs in the same repos and notifies you when someone else leaves a review or comment. Clicking the notification opens that review or comment on GitHub (a changes-requested review wins, then an approval, then other reviews, then the oldest new comment). New feedback on a PR is batched into one notification once that PR has had no new feedback for `quiet_minutes` (default 5), or after `max_wait_minutes` (default 30) at most. Feedback that existed before the first run is not notified.
 
+A stacked PR (one whose base is not the repo's default branch) is reviewed with the full default-branch-to-head diff as context, plus the open PRs below it in the stack. Findings and inline comments stay on the PR's own changes; interactions with lower PRs are anchored in this PR and reference the other PR by number.
+
 The LLM is used only for the review step. Discovery, diffing, guidance collection, risk policy, posting, and state are plain deterministic Python.
 
 ## Setup

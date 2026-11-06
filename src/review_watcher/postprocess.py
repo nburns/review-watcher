@@ -19,6 +19,7 @@ from review_watcher.models import (
     RiskLevel,
     Severity,
     Side,
+    StackContext,
     Tier,
     max_risk,
 )
@@ -256,6 +257,8 @@ def _render_body(
     sections: list[str] = [BOT_PREFIX]
     if ctx.guidance_changes.changes:
         sections.append(_guidance_banner(ctx.pr, ctx.guidance_changes, draft))
+    if ctx.stack is not None:
+        sections.append(_stack_note(ctx.pr, ctx.stack))
     sections.append(_risk_section(final_risk, model_risk, floor_reasons, draft))
     sections.append(_severity_table(draft.findings))
     sections.append("### Summary\n\n" + _neutralize(draft.summary))
@@ -276,6 +279,23 @@ def _render_body(
         sections.append(f"Guidance sources used: {sources}")
     sections.append(f"{MARKER_PREFIX}{ctx.pr.head_sha} -->")
     return "\n\n".join(sections)
+
+
+def _stack_note(pr: PullRequestRef, stack: StackContext) -> str:
+    below = ", ".join(f"#{ancestor.number}" for ancestor in stack.ancestors)
+    on_top = f" on top of {below}" if below else ""
+    lines = [
+        f"> Stacked PR: merges into `{_cell(pr.base_ref)}`{on_top}, not "
+        f"`{_cell(stack.default_branch)}`. Reviewed with the full "
+        f"`{_cell(stack.default_branch)}...head` diff as context; findings cover only this "
+        "PR's changes."
+    ]
+    if stack.diff_truncated:
+        lines.append(
+            "> The stack diff exceeded the size limit and was truncated, so interactions with "
+            "lower PRs were **not fully assessed**."
+        )
+    return "\n".join(lines)
 
 
 def _guidance_banner(pr: PullRequestRef, changes: GuidanceChanges, draft: ReviewDraft) -> str:

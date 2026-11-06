@@ -81,8 +81,10 @@ class PullRequestRef(BaseModel):
     repo: str
     number: int
     head_sha: str
+    head_ref: str
     base_ref: str
     base_sha: str
+    default_branch: str
     url: str
     title: str
     author: str
@@ -95,6 +97,10 @@ class PullRequestRef(BaseModel):
     @property
     def slug(self) -> str:
         return f"{self.owner}/{self.repo}#{self.number}"
+
+    @property
+    def is_stacked(self) -> bool:
+        return self.base_ref != self.default_branch
 
 
 class Finding(BaseModel):
@@ -227,6 +233,15 @@ class ReviewSummary(BaseModel):
     body: str
 
 
+class StackContext(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    default_branch: str
+    ancestors: list[PullRequestRef]
+    diff_text: str
+    diff_truncated: bool
+
+
 class ReviewContext(BaseModel):
     model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True)
 
@@ -238,3 +253,4 @@ class ReviewContext(BaseModel):
     guidance: ReviewGuidance
     guidance_changes: GuidanceChanges
     max_inline_comments: int
+    stack: StackContext | None

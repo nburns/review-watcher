@@ -22,6 +22,7 @@ CREATE TABLE IF NOT EXISTS reviews (
     guidance_tier_max TEXT,
     error TEXT,
     attempts INTEGER NOT NULL,
+    timeouts INTEGER NOT NULL DEFAULT 0,
     first_seen_at TEXT NOT NULL,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
@@ -65,6 +66,7 @@ class ReviewRecord:
     guidance_tier_max: str | None
     error: str | None
     attempts: int
+    timeouts: int
     first_seen_at: datetime
     created_at: datetime
     updated_at: datetime
@@ -77,6 +79,11 @@ class StateStore:
         path.parent.mkdir(parents=True, exist_ok=True)
         with self._connect() as connection:
             connection.executescript(_SCHEMA)
+            columns = {row["name"] for row in connection.execute("PRAGMA table_info(reviews)")}
+            if "timeouts" not in columns:
+                connection.execute(
+                    "ALTER TABLE reviews ADD COLUMN timeouts INTEGER NOT NULL DEFAULT 0"
+                )
 
     @contextmanager
     def _connect(self) -> Generator[sqlite3.Connection]:
@@ -109,9 +116,9 @@ class StateStore:
                 """
                 INSERT INTO reviews (
                     repo, pr_number, head_sha, status, review_id, review_url, risk,
-                    guidance_changed, guidance_tier_max, error, attempts,
+                    guidance_changed, guidance_tier_max, error, attempts, timeouts,
                     first_seen_at, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT (repo, pr_number, head_sha) DO UPDATE SET
                     status = excluded.status,
                     review_id = excluded.review_id,
@@ -121,6 +128,7 @@ class StateStore:
                     guidance_tier_max = excluded.guidance_tier_max,
                     error = excluded.error,
                     attempts = excluded.attempts,
+                    timeouts = excluded.timeouts,
                     updated_at = excluded.updated_at
                 """,
                 (
@@ -135,6 +143,7 @@ class StateStore:
                     record.guidance_tier_max,
                     record.error,
                     record.attempts,
+                    record.timeouts,
                     record.first_seen_at.isoformat(),
                     record.created_at.isoformat(),
                     record.updated_at.isoformat(),
@@ -225,6 +234,7 @@ def _record_from_row(row: sqlite3.Row) -> ReviewRecord:
         guidance_tier_max=row["guidance_tier_max"],
         error=row["error"],
         attempts=row["attempts"],
+        timeouts=row["timeouts"],
         first_seen_at=datetime.fromisoformat(row["first_seen_at"]),
         created_at=datetime.fromisoformat(row["created_at"]),
         updated_at=datetime.fromisoformat(row["updated_at"]),

@@ -1,6 +1,12 @@
 from pathlib import Path
 
-from review_watcher.notifier import Notification, TerminalNotifierNotifier
+from review_watcher.notifier import (
+    NOTIFY_TIMEOUT_S,
+    Notification,
+    TerminalNotifierNotifier,
+    notify_logging_failures,
+)
+from review_watcher.proc import CommandTimeout
 
 
 async def test_text_fields_are_escaped_for_terminal_notifier(tmp_path: Path) -> None:
@@ -28,3 +34,13 @@ async def test_text_fields_are_escaped_for_terminal_notifier(tmp_path: Path) -> 
         "-subtitle": "\\-2 comments",
         "-open": "https://github.com/o/r/pull/1/files",
     }
+
+
+async def test_notifier_timeout_is_logged_not_raised(tmp_path: Path) -> None:
+    class HangingNotifier:
+        async def notify(self, notification: Notification) -> None:
+            raise CommandTimeout(["terminal-notifier"], NOTIFY_TIMEOUT_S)
+
+    await notify_logging_failures(
+        HangingNotifier(), Notification(title="t", message="m", group="g", open_url=None)
+    )

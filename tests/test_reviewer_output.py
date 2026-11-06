@@ -29,6 +29,7 @@ def _ctx(*, with_changes: bool) -> ReviewContext:
         guidance=ReviewGuidance(files=[], omitted_paths=[]),
         guidance_changes=GuidanceChanges(changes=changes),
         max_inline_comments=10,
+        stack=None,
     )
 
 

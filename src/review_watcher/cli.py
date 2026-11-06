@@ -199,7 +199,7 @@ def run(ctx: typer.Context) -> None:
         logger.info("run_skipped reason=lock_held")
         return
     except Exception as exc:
-        typer.echo(f"review-watcher run failed: {exc}", err=True)
+        typer.echo(f"review-watcher run failed: {str(exc) or type(exc).__name__}", err=True)
         raise typer.Exit(code=1) from exc
     for outcome in result.reviews.outcomes:
         logger.info("pr_outcome pr=%s action=%s", outcome.slug, outcome.action.value)

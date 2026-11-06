@@ -44,6 +44,8 @@ class RepoCache:
         self._git_bin = str(git_binary)
         self._bare_root = bare_root
         self._worktree_root = worktree_root
+        # git reports worktree paths with symlinks resolved, e.g. /var -> /private/var.
+        self._worktree_root_real = worktree_root.resolve()
         self._locks: dict[str, asyncio.Lock] = {}
         self._env = base_env(_GIT_ENV_EXTRA)
 
@@ -79,16 +81,13 @@ class RepoCache:
                         str(bare),
                     ]
                 )
-            await self._git_bare(
-                pr,
-                [
-                    "fetch",
-                    "--filter=blob:none",
-                    "origin",
-                    f"+refs/pull/{pr.number}/head:refs/rw/pr/{pr.number}",
-                    f"+refs/heads/{pr.base_ref}:refs/rw/base/{pr.base_ref}",
-                ],
-            )
+            refspecs = [
+                f"+refs/pull/{pr.number}/head:refs/rw/pr/{pr.number}",
+                f"+refs/heads/{pr.base_ref}:refs/rw/base/{pr.base_ref}",
+            ]
+            if pr.is_stacked:
+                refspecs.append(f"+refs/heads/{pr.default_branch}:refs/rw/base/{pr.default_branch}")
+            await self._git_bare(pr, ["fetch", "--filter=blob:none", "origin", *refspecs])
             for sha in (pr.head_sha, pr.base_sha):
                 await self._git_bare(pr, ["cat-file", "-e", f"{sha}^{{commit}}"])
 
@@ -97,7 +96,10 @@ class RepoCache:
         await self.ensure_fetched(pr)
         path = self._worktree_root / f"{pr.owner}-{pr.repo}-{pr.number}-{pr.head_sha[:12]}"
         async with self._lock_for(pr):
-            await self._git_bare(pr, ["worktree", "add", "--detach", str(path), pr.head_sha])
+            # Double force overrides a stale locked registration left by a killed add.
+            await self._git_bare(
+                pr, ["worktree", "add", "--force", "--force", "--detach", str(path), pr.head_sha]
+            )
         try:
             yield path
         finally:
@@ -136,6 +138,17 @@ class RepoCache:
         )
         return _parse_name_status(result.stdout)
 
+    async def default_branch_diff(self, pr: PullRequestRef) -> str:
+        result = await self._git_bare(
+            pr,
+            [
+                "diff",
+                "--no-color",
+                f"refs/rw/base/{pr.default_branch}...{pr.head_sha}",
+            ],
+        )
+        return result.stdout.decode("utf-8", errors="replace")
+
     async def prune(self) -> None:
         if self._worktree_root.exists():
             for child in self._worktree_root.iterdir():
@@ -145,7 +158,22 @@ class RepoCache:
             return
         for bare in self._bare_root.rglob("*.git"):
             if bare.is_dir():
+                await self._unlock_owned_worktrees(bare)
                 await self._git(["-C", str(bare), "worktree", "prune"])
+
+    async def _unlock_owned_worktrees(self, bare: Path) -> None:
+        # A killed `worktree add` leaves an "initializing" lock, and prune skips locked entries.
+        result = await self._git(["-C", str(bare), "worktree", "list", "--porcelain", "-z"])
+        for record in result.stdout.split(b"\0\0"):
+            fields = [
+                field.decode("utf-8", errors="surrogateescape") for field in record.split(b"\0")
+            ]
+            path = next(
+                (f.removeprefix("worktree ") for f in fields if f.startswith("worktree ")), None
+            )
+            locked = any(f == "locked" or f.startswith("locked ") for f in fields)
+            if path is not None and locked and Path(path).is_relative_to(self._worktree_root_real):
+                await self._git(["-C", str(bare), "worktree", "unlock", path])
 
 
 def _parse_name_status(raw: bytes) -> list[NameStatusEntry]:

@@ -14,11 +14,12 @@ from review_watcher.models import (
     FinalReview,
     PullRequestRef,
     ReviewContext,
+    StackContext,
     Tier,
 )
 from review_watcher.notifier import Notification, Notifier, notify_logging_failures
 from review_watcher.postprocess import MARKER_PREFIX, finalize, fold_inline_into_body
-from review_watcher.proc import CommandFailed
+from review_watcher.proc import CommandFailed, CommandTimeout
 from review_watcher.repo_cache import RepoCache
 from review_watcher.reviewer import Reviewer
 from review_watcher.state import ReviewRecord, ReviewStatus, StateStore
@@ -27,6 +28,9 @@ logger = logging.getLogger(__name__)
 ERROR_TITLE = "review-watcher failed"
 PENDING_STATE = "PENDING"
 SKIP_STATUSES = (ReviewStatus.POSTED, ReviewStatus.SKIPPED_EXISTING_PENDING)
+TIMEOUT_BACKOFF_CAP = timedelta(hours=4)
+_MAX_BACKOFF_EXPONENT = 10
+MAX_STACK_DEPTH = 10
 
 
 @dataclass(frozen=True)
@@ -38,6 +42,7 @@ class _Posted:
 class Action(StrEnum):
     ALREADY_HANDLED = "already_handled"
     FAILURE_LIMIT_REACHED = "failure_limit_reached"
+    TIMEOUT_BACKOFF = "timeout_backoff"
     REREVIEW_DISABLED = "rereview_disabled"
     DEBOUNCED = "debounced"
     POSTED = "posted"
@@ -110,7 +115,9 @@ class Pipeline:
                 return await self._process(pr, force=False, debounce=True)
             except Exception as exc:
                 logger.exception("pr_failed pr=%s", pr.slug)
-                await self._record_failure(pr, str(exc))
+                # Timeouts reflect network or host slowness, not the PR: back off, never give up.
+                timed_out = isinstance(exc, CommandTimeout)
+                await self._record_failure(pr, str(exc), timed_out=timed_out)
                 return RunOutcome(slug=pr.slug, action=Action.FAILED, error=str(exc))
 
     async def _process(self, pr: PullRequestRef, *, force: bool, debounce: bool) -> RunOutcome:
@@ -170,6 +177,17 @@ class Pipeline:
             ):
                 logger.warning("pr_skipped reason=failure_limit pr=%s", pr.slug)
                 return Action.FAILURE_LIMIT_REACHED
+            if record.status == ReviewStatus.FAILED and record.timeouts > 0:
+                retry_at = record.updated_at + _timeout_backoff(
+                    record.timeouts, self._config.interval_minutes
+                )
+                if self._clock() < retry_at:
+                    logger.info(
+                        "pr_skipped reason=timeout_backoff pr=%s retry_at=%s",
+                        pr.slug,
+                        retry_at.isoformat(),
+                    )
+                    return Action.TIMEOUT_BACKOFF
             return None
         if not self._config.rereview_on_push:
             history = self._state.history(pr.full_name, pr.number)
@@ -188,6 +206,7 @@ class Pipeline:
             )
             guidance = await collect_guidance(self._repos, pr, diff, config.guidance)
             clipped, truncated = _clip_diff(diff_text, config.reviewer.max_diff_bytes)
+            stack = await self._stack_context(pr) if pr.is_stacked else None
             ctx = ReviewContext(
                 pr=pr,
                 diff_text=clipped,
@@ -197,6 +216,7 @@ class Pipeline:
                 guidance=guidance,
                 guidance_changes=guidance_changes,
                 max_inline_comments=config.reviewer.max_inline_comments,
+                stack=stack,
             )
             draft = await self._reviewer.review(ctx)
         return finalize(
@@ -205,6 +225,37 @@ class Pipeline:
             diff=diff,
             sensitive_paths=config.sensitive_paths,
         )
+
+    async def _stack_context(self, pr: PullRequestRef) -> StackContext:
+        ancestors = await self._stack_ancestors(pr)
+        full_diff = await self._repos.default_branch_diff(pr)
+        clipped, truncated = _clip_diff(full_diff, self._config.reviewer.max_diff_bytes)
+        return StackContext(
+            default_branch=pr.default_branch,
+            ancestors=ancestors,
+            diff_text=clipped,
+            diff_truncated=truncated,
+        )
+
+    async def _stack_ancestors(self, pr: PullRequestRef) -> list[PullRequestRef]:
+        ancestors: list[PullRequestRef] = []
+        seen = {pr.number}
+        branch = pr.base_ref
+        while branch != pr.default_branch and len(ancestors) < MAX_STACK_DEPTH:
+            parents = await self._github.list_open_prs_with_head(pr.owner, pr.repo, branch)
+            if len(parents) != 1 or parents[0].number in seen:
+                logger.info(
+                    "stack_walk_stopped pr=%s branch=%s open_prs=%d",
+                    pr.slug,
+                    branch,
+                    len(parents),
+                )
+                break
+            parent = parents[0]
+            ancestors.append(parent)
+            seen.add(parent.number)
+            branch = parent.base_ref
+        return ancestors
 
     async def _blocked_by_existing_pending(self, pr: PullRequestRef) -> bool:
         reviews = await self._github.list_reviews(pr)
@@ -250,6 +301,7 @@ class Pipeline:
             guidance_tier_max=None,
             error=None,
             attempts=0,
+            timeouts=0,
             first_seen_at=now,
             created_at=now,
             updated_at=now,
@@ -278,12 +330,13 @@ class Pipeline:
             guidance_tier_max=None if tier is None else tier.value,
             error=None,
             attempts=previous.attempts,
+            timeouts=0,
             first_seen_at=previous.first_seen_at,
             created_at=previous.created_at,
             updated_at=self._clock(),
         )
 
-    async def _record_failure(self, pr: PullRequestRef, error: str) -> None:
+    async def _record_failure(self, pr: PullRequestRef, error: str, *, timed_out: bool) -> None:
         now = self._clock()
         previous = self._state.get(pr.full_name, pr.number, pr.head_sha)
         base = previous or self._new_record(pr, ReviewStatus.FAILED, now)
@@ -299,7 +352,8 @@ class Pipeline:
                 guidance_changed=False,
                 guidance_tier_max=None,
                 error=error,
-                attempts=base.attempts + 1,
+                attempts=base.attempts if timed_out else base.attempts + 1,
+                timeouts=base.timeouts + 1 if timed_out else 0,
                 first_seen_at=base.first_seen_at,
                 created_at=base.created_at,
                 updated_at=now,
@@ -318,6 +372,11 @@ class Pipeline:
 
     async def _notify(self, notification: Notification) -> None:
         await notify_logging_failures(self._notifier, notification)
+
+
+def _timeout_backoff(consecutive_timeouts: int, interval_minutes: int) -> timedelta:
+    exponent = min(consecutive_timeouts - 1, _MAX_BACKOFF_EXPONENT)
+    return min(timedelta(minutes=interval_minutes) * 2**exponent, TIMEOUT_BACKOFF_CAP)
 
 
 def _clip_diff(diff_text: str, max_bytes: int) -> tuple[str, bool]:
