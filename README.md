@@ -45,6 +45,8 @@ Tasks live in `[tool.poe.tasks]` in `pyproject.toml`; `uv run poe` lists them.
 | `check` | Lint, format check, type check, and tests |
 | `lint`, `format-check`, `types`, `test` | Each check on its own |
 
+CI (`.github/workflows/ci.yml`) runs `poe check` on macOS for pushes to `main` and for pull requests.
+
 ## Security model
 
 - The `claude` CLI runs in a PR worktree with `--restricted --strict-mcp-config --setting-sources "" --disable-slash-commands --no-session-persistence`. Its tools are read-only (`Read,Grep,Glob`). It loads no settings, hooks, MCP servers, or slash commands from the repo. `--bare` is never used because it breaks keychain auth.
