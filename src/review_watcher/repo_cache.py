@@ -36,6 +36,14 @@ class TreeEntry:
     path: str
     mode: str
 
+    @property
+    def is_blob(self) -> bool:
+        return self.mode not in (_SYMLINK_MODE, _SUBMODULE_MODE)
+
+    @property
+    def is_symlink(self) -> bool:
+        return self.mode == _SYMLINK_MODE
+
 
 @dataclass(frozen=True)
 class NameStatusEntry:
@@ -127,10 +135,16 @@ class RepoCache:
         return entries
 
     async def read_blob(self, pr: PullRequestRef, entry: TreeEntry) -> bytes:
-        if entry.mode in (_SYMLINK_MODE, _SUBMODULE_MODE):
+        if not entry.is_blob:
             raise GitError(f"refusing to read non-blob entry {entry.path} (mode {entry.mode})")
         result = await self._git_bare(pr, ["cat-file", "blob", f"{pr.head_sha}:{entry.path}"])
         return result.stdout
+
+    async def read_symlink_target(self, pr: PullRequestRef, entry: TreeEntry) -> str:
+        if not entry.is_symlink:
+            raise GitError(f"{entry.path} is not a symlink (mode {entry.mode})")
+        result = await self._git_bare(pr, ["cat-file", "blob", f"{pr.head_sha}:{entry.path}"])
+        return result.stdout.decode("utf-8", errors="surrogateescape")
 
     async def diff_name_status(self, pr: PullRequestRef) -> list[NameStatusEntry]:
         result = await self._git_bare(
