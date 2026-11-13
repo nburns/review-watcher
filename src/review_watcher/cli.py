@@ -9,9 +9,12 @@ from typing import Annotated, cast
 import typer
 
 from review_watcher import launchd
+from review_watcher.auth import AuthChecker, sign_in, trace_to_stderr
 from review_watcher.config import LoadedConfig, load_config
+from review_watcher.context import SOURCE_TOOLS, CliContextFetcher
 from review_watcher.feedback import FeedbackSummary, FeedbackWatcher
 from review_watcher.github import GhCliGitHub
+from review_watcher.launcher import CommandLauncher
 from review_watcher.lock import RunLockHeld, run_lock
 from review_watcher.logging_setup import configure_logging
 from review_watcher.models import PullRequestRef
@@ -115,6 +118,7 @@ async def _build_runtime(opts: Options, loaded: LoadedConfig) -> Runtime:
     )
     github = GhCliGitHub(gh_binary)
     state = StateStore(loaded.var_dir / "state.db", clock=utc_now)
+    program = launchd.venv_program(loaded)
     pipeline = Pipeline(
         config=settings,
         github=github,
@@ -122,6 +126,21 @@ async def _build_runtime(opts: Options, loaded: LoadedConfig) -> Runtime:
         reviewer=reviewer,
         notifier=notifier,
         state=state,
+        auth=AuthChecker(
+            state=state,
+            notifier=notifier,
+            launcher=CommandLauncher(
+                directory=loaded.var_dir / "auth",
+                program=program,
+                config_path=loaded.config_path,
+            ),
+        ),
+        context=CliContextFetcher(settings.auth),
+        approval_launcher=CommandLauncher(
+            directory=loaded.var_dir / "approvals",
+            program=program,
+            config_path=loaded.config_path,
+        ),
         clock=utc_now,
         dry_run=opts.dry_run,
     )
@@ -216,16 +235,11 @@ def review(
     """Review one PR now. Posts a pending review unless --dry-run is set."""
     opts = _options(ctx)
     loaded = _load(opts)
-    match = PR_URL_RE.fullmatch(url.strip())
-    if match is None:
-        raise typer.BadParameter("expected https://github.com/<owner>/<repo>/pull/<number>")
-    owner, repo, number = match.group(1), match.group(2), int(match.group(3))
-    if not loaded.settings.allows_repo(f"{owner}/{repo}"):
-        raise typer.BadParameter(f"{owner}/{repo} is not in the configured repos allowlist")
+    target = _parse_pr_url(url, loaded)
 
     async def _go() -> tuple[PullRequestRef, RunOutcome]:
         runtime = await _build_runtime(opts, loaded)
-        pr = await runtime.github.fetch_pull_request(owner, repo, number)
+        pr = await runtime.github.fetch_pull_request(target.owner, target.repo, target.number)
         outcome = await runtime.pipeline.review_one(pr, force=force)
         return pr, outcome
 
@@ -233,6 +247,45 @@ def review(
     if outcome.final is not None and opts.dry_run:
         typer.echo(outcome.final.model_dump_json(indent=2))
     typer.echo(f"{outcome.slug}: {outcome.action.value}", err=True)
+
+
+@app.command()
+def approve(
+    ctx: typer.Context,
+    url: Annotated[str, typer.Argument(help="GitHub PR URL.")],
+) -> None:
+    """Approve reviewing a PR's current head; the next cycle reviews it."""
+    opts = _options(ctx)
+    loaded = _load(opts)
+    target = _parse_pr_url(url, loaded)
+
+    async def _go() -> PullRequestRef:
+        github = GhCliGitHub(resolve_binary("gh"))
+        return await github.fetch_pull_request(target.owner, target.repo, target.number)
+
+    pr = asyncio.run(_go())
+    state = StateStore(loaded.var_dir / "state.db", clock=utc_now)
+    state.approve(pr.full_name, pr.number, pr.head_sha)
+    logger.info("pr_approved pr=%s head=%s", pr.slug, pr.head_sha)
+    typer.echo(f"{pr.slug} by {pr.author}: {pr.title}")
+    typer.echo(f"approved head {pr.head_sha[:12]}; it is reviewed on the next cycle")
+
+
+@dataclass(frozen=True)
+class _PrTarget:
+    owner: str
+    repo: str
+    number: int
+
+
+def _parse_pr_url(url: str, loaded: LoadedConfig) -> _PrTarget:
+    match = PR_URL_RE.fullmatch(url.strip())
+    if match is None:
+        raise typer.BadParameter("expected https://github.com/<owner>/<repo>/pull/<number>")
+    owner, repo, number = match.group(1), match.group(2), int(match.group(3))
+    if not loaded.settings.allows_repo(f"{owner}/{repo}"):
+        raise typer.BadParameter(f"{owner}/{repo} is not in the configured repos allowlist")
+    return _PrTarget(owner=owner, repo=repo, number=number)
 
 
 @app.command()
@@ -245,7 +298,7 @@ def status(ctx: typer.Context) -> None:
     async def _go() -> None:
         runtime = await _build_runtime(opts, loaded)
         found = await runtime.github.search_review_requests(
-            settings.github_login, settings.repos, settings.include_team_requests
+            settings.github_login, settings.repo_names, settings.include_team_requests
         )
         if len(found) == 0:
             typer.echo("No open review requests in the allowlisted repos.")
@@ -274,6 +327,36 @@ def prune_command(ctx: typer.Context) -> None:
     typer.echo(f"pruned state_rows={removed} worktrees=removed")
 
 
+@app.command("auth-login")
+def auth_login(
+    ctx: typer.Context,
+    name: Annotated[str, typer.Argument(help="Name of an [[auth]] entry in config.")],
+) -> None:
+    """Run an auth entry's login command in this terminal, then re-run its check."""
+    opts = _options(ctx)
+    loaded = _load(opts)
+    matches = [auth for auth in loaded.settings.auth if auth.name == name]
+    if len(matches) == 0:
+        raise typer.BadParameter(f"no [[auth]] entry named {name!r}")
+    auth = matches[0]
+    if auth.login is None:
+        raise typer.BadParameter(f"[[auth]] {name!r} has no login command; set login in config")
+    try:
+        outcome = asyncio.run(sign_in(auth, trace=trace_to_stderr))
+    except KeyboardInterrupt:
+        typer.echo(f"{name}: sign-in cancelled", err=True)
+        raise typer.Exit(code=130) from None
+    if outcome.login_exit is None:
+        typer.echo(f"{name}: already signed in")
+        return
+    if outcome.login_exit != 0:
+        typer.echo(f"{name}: login exited {outcome.login_exit}", err=True)
+    if not outcome.result.ok:
+        typer.echo(f"{name}: check still failing ({outcome.result.detail})", err=True)
+        raise typer.Exit(code=1)
+    typer.echo(f"{name}: signed in; waiting reviews resume next cycle")
+
+
 @app.command("install-agent")
 def install_agent(ctx: typer.Context) -> None:
     """Write the LaunchAgent plist and (re)load it."""
@@ -288,8 +371,12 @@ def install_agent(ctx: typer.Context) -> None:
         binaries.append(resolve_binary("terminal-notifier"))
     if not opts.no_llm:
         binaries.append(resolve_claude_binary())
+    tools = {auth.check[0] for auth in settings.auth}
+    tools.update(auth.login[0] for auth in settings.auth if auth.login is not None)
+    tools.update(tool for source in settings.context.values() for tool in SOURCE_TOOLS[source.kind])
+    binaries.extend(resolve_binary(tool) for tool in sorted(tools))
 
-    first_repo = settings.repos[0]
+    first_repo = settings.repo_names[0]
 
     async def _ssh_check() -> None:
         await run_command(

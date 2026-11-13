@@ -2,7 +2,14 @@
 
 github_login = "your-github-login"
 # Only PRs in these repos are considered. Empty lists are rejected.
-repos = ["owner/name"]
+# An entry is either "owner/name" or a table with extra review instructions, one sentence each.
+repos = [
+    "owner/name",
+    { name = "owner/other", context = ["prod-logs"], instructions = [
+        "Every new API endpoint needs an authorization test.",
+        "Database migrations must be backwards compatible with the previous release.",
+    ] },
+]
 
 include_team_requests = true   # false: only direct review requests (user-review-requested)
 skip_drafts = true
@@ -12,6 +19,12 @@ concurrency = 2
 existing_pending_policy = "skip"   # "skip" or "replace" (replace only deletes pending reviews with our marker)
 rereview_on_push = true        # false: review each PR once, ignore later pushes
 max_attempts = 3               # failed reviews are retried up to this many times
+# PRs by these GitHub logins are reviewed only after you approve each head SHA.
+# The cycle sends a clickable "Approve review?" notification; `review <url>` bypasses this.
+approval_required_authors = []
+# At most this many automatic reviews per author in any rolling 24 hours. Extra PRs are
+# marked throttled and reviewed once the window frees up. Keys are GitHub logins.
+daily_review_limits = {}       # e.g. { some-login = 10 }
 sensitive_paths = [
     "**/migrations/**",
     "**/auth/**",
@@ -75,3 +88,21 @@ backend = "terminal_notifier"  # or "osascript" (no click-through, logs the URL)
 
 [paths]
 var_dir = "var"
+
+# Checks run once per cycle for repos whose context needs them. A failing check sends one
+# notification with the hint, and those reviews wait until a later cycle's check passes.
+# With login set, clicking the notification runs it in a new terminal window.
+[[auth]]
+name = "gcloud"
+check = ["gcloud", "auth", "print-access-token", "--quiet"]
+hint = "Run gcloud auth login, then finish sign-in in the browser"
+login = ["gcloud", "auth", "login"]
+
+# Context sources: gcloud_logs, aws_logs, mysql_schema, hoop_schema. See README.
+[context.prod-logs]
+kind = "gcloud_logs"
+auth = "gcloud"
+project = "my-prod-project"
+filter = "severity>=ERROR"
+freshness = "24h"
+limit = 200

@@ -27,9 +27,11 @@ Then grant notification permission to terminal-notifier in System Settings > Not
 | --- | --- |
 | `run` | One cycle: review requests plus feedback on your PRs (what launchd runs) |
 | `review <pr-url> [--force]` | Review one PR now. Posts a pending review unless `--dry-run` |
+| `approve <pr-url>` | Approve reviewing a gated author's PR at its current head; the next cycle reviews it |
 | `status` | List review-requested PRs and their recorded state |
 | `install-agent` / `uninstall-agent` | Manage the LaunchAgent |
 | `prune` | Delete state older than 90 days and orphaned worktrees |
+| `auth-login <name>` | Run an `[[auth]]` entry's `login` in this terminal, then re-check |
 
 Global options: `--config PATH`, `--dry-run` (no posting, prints the review JSON for `review`), `--no-llm` (skip claude), `--verbose`.
 
@@ -54,6 +56,21 @@ CI (`.github/workflows/ci.yml`) runs `poe check` on macOS for pushes to `main` a
 - A PR that changes review or agent configuration (`guidance_watch` globs) gets a visible banner, a minimum risk floor (`medium` for review guidance, `high` for settings, hooks, and MCP config), and a `CONFIG CHANGED` notification title.
 - Git runs with `core.hooksPath=/dev/null`, `protocol.file.allow=never`, `submodule.recurse=false`, and `GIT_LFS_SKIP_SMUDGE=1`. Submodules are never fetched.
 - Reviews are posted as PENDING. You submit them yourself on GitHub.
+- Operational context (logs, database schema) is fetched by plain Python in `context.py` before the review and injected as delimited, untrusted data. The LLM gets no new tools. Database access is schema and approximate row counts only, through fixed queries in a read-only session; table names come from the database itself. Credentials go through environment variables (`MYSQL_PWD`), never argv, the prompt, or logs. Log text is grouped and redacted (emails, bearer tokens, JWTs, AWS keys, long hex and base64) on a best-effort basis, and the rubric forbids quoting log lines or data values.
+
+## Approval for listed authors
+
+PRs by a login in `approval_required_authors` are not reviewed automatically. Once the debounce passes, the PR is marked `awaiting_approval` and you get one "Approve review?" notification per head SHA. Clicking it opens `var/approvals/approve-<owner>-<repo>-<number>.command`, which runs `review-watcher approve <url>` and records approval for the PR's current head. The next cycle reviews it. A new push needs a new approval. Ignored PRs are never reviewed. `review <url>` skips the gate.
+
+## Per-author daily limit
+
+`daily_review_limits` caps automatic reviews per GitHub login in any rolling 24 hours. A review counts when it starts, once per head SHA, so retries of the same head are free. Over the limit, the PR is marked `throttled` and you get one "Daily limit hit" notification for that head. A later cycle reviews it once the window has room. `review <url>` is not limited.
+
+## Operational context and auth
+
+A repo entry can list `context` sources (`gcloud_logs`, `aws_logs`, `mysql_schema`, `hoop_schema`), each needing one or more `[[auth]]` checks. Each cycle runs the needed checks once. If any fails, the PR is marked `awaiting_auth` (not a failure, no backoff), you get one notification per expired provider with its `hint`, and the PR is reviewed on the first later cycle where the check passes. A source that fails after auth passes does not block the review; the body lists it as unavailable. Run `install-agent` after changing auth or context so the plist `PATH` includes their tools.
+
+An `[[auth]]` entry with a `login` command gets a clickable notification. The click opens `var/auth/<name>.command` in whichever app opens `.command` files, which is Terminal.app unless you change it. That script runs `review-watcher auth-login <name>`, which skips login if the check already passes, otherwise runs `login` and re-checks. The next cycle picks up the result. To use another terminal, open Get Info on any `.command` file, choose the app under "Open with", and click "Change All…". If you dismiss the notification, run `uv run review-watcher auth-login <name>` yourself. `config.toml` is trusted input: `check` and `login` run as you.
 
 ## Configuration
 

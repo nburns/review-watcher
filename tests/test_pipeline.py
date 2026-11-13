@@ -1,16 +1,20 @@
 import asyncio
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
 
+from review_watcher import rubric
+from review_watcher.auth import AuthChecker
 from review_watcher.config import Config
+from review_watcher.launcher import CommandLauncher
 from review_watcher.models import ReviewSummary
 from review_watcher.pipeline import ERROR_TITLE, Action, Pipeline
 from review_watcher.state import ReviewStatus, StateStore
 from tests.fakes import (
     GIT,
+    FakeContextFetcher,
     FakeGitHub,
     FakeNotifier,
     FakeRepoCache,
@@ -47,6 +51,8 @@ class World:
     notifier: FakeNotifier
     reviewer: FakeReviewer
     github: FakeGitHub
+    context: FakeContextFetcher = field(default_factory=FakeContextFetcher)
+    approval_launcher: CommandLauncher | None = None
 
     def pipeline(self, config: Config, *, dry_run: bool = False) -> Pipeline:
         repos = FakeRepoCache(
@@ -61,6 +67,9 @@ class World:
             reviewer=self.reviewer,
             notifier=self.notifier,
             state=self.state,
+            auth=AuthChecker(state=self.state, notifier=self.notifier, launcher=None),
+            context=self.context,
+            approval_launcher=self.approval_launcher,
             clock=self.clock,
             dry_run=dry_run,
         )
@@ -281,3 +290,117 @@ async def test_review_cancelled_by_run_deadline_backs_off(tmp_path: Path) -> Non
     assert record.status == ReviewStatus.FAILED
     assert record.timeouts == 1
     assert record.attempts == 0
+
+
+async def test_repo_instructions_reach_the_review_prompt(tmp_path: Path) -> None:
+    world = _world(tmp_path)
+    config = make_config(repos=[{"name": "acme/app", "instructions": ["Check the migrations."]}])
+
+    await world.pipeline(config).run()
+
+    ctx = world.reviewer.contexts[0]
+    prompt = rubric.build_system_prompt(
+        guidance=ctx.guidance,
+        head_sha=ctx.pr.head_sha,
+        nonce="n",
+        max_inline_comments=ctx.max_inline_comments,
+        stacked=False,
+        repo_instructions=ctx.repo_instructions,
+        has_context=False,
+    )
+    assert "- Check the migrations." in prompt
+
+
+async def test_reviews_wait_for_auth_and_resume_with_context_once_it_passes(
+    tmp_path: Path,
+) -> None:
+    world = _world(tmp_path)
+    authed = tmp_path / "authed"
+    config = make_config(
+        repos=[{"name": "acme/app", "context": ["prod-logs"]}],
+        auth=[{"name": "gcloud", "check": ["/bin/test", "-e", str(authed)], "hint": "Log in"}],
+        context={
+            "prod-logs": {
+                "kind": "gcloud_logs",
+                "auth": "gcloud",
+                "project": "prod",
+                "filter": "severity>=ERROR",
+            }
+        },
+    )
+
+    actions = [(await world.pipeline(config).run()).outcomes[0].action for _ in range(2)]
+    authed.touch()
+    actions.append((await world.pipeline(config).run()).outcomes[0].action)
+
+    assert actions == [Action.AWAITING_AUTH, Action.AWAITING_AUTH, Action.POSTED]
+    assert [n.title for n in world.notifier.sent].count("Auth needed: gcloud") == 1
+    assert [r.name for r in world.reviewer.contexts[0].operational_context] == ["prod-logs"]
+    assert "> Operational context: `prod-logs`" in world.github.created[0].body
+
+
+async def test_gated_author_waits_for_approval_of_each_head(tmp_path: Path) -> None:
+    world = _world(tmp_path)
+    world.approval_launcher = CommandLauncher(
+        directory=tmp_path / "approvals", program=tmp_path / "rw", config_path=tmp_path / "c.toml"
+    )
+    config = make_config(approval_required_authors=["OctoCat"])
+
+    actions = [(await world.pipeline(config).run()).outcomes[0].action for _ in range(2)]
+    world.state.approve("acme/app", 1, world.head)
+    actions.append((await world.pipeline(config).run()).outcomes[0].action)
+
+    new_head = commit_files(world.repo, {**BASE_FILES, "src/app.py": "a = 2\n"})
+    publish(world.repo)
+    world.github.prs = [make_pr(1, new_head, world.base)]
+    world.github.diff_text = diff_between(world.repo, world.base, new_head)
+    actions.append((await world.pipeline(config).run()).outcomes[0].action)
+
+    assert actions == [
+        Action.AWAITING_APPROVAL,
+        Action.AWAITING_APPROVAL,
+        Action.POSTED,
+        Action.AWAITING_APPROVAL,
+    ]
+    assert len(world.reviewer.contexts) == 1
+    prompts = [n for n in world.notifier.sent if n.title == "Approve review? acme/app#1"]
+    assert [n.open_url for n in prompts] == [
+        (tmp_path / "approvals" / "approve-acme-app-1.command").as_uri()
+    ] * 2
+
+
+async def test_manual_review_bypasses_approval_and_others_are_not_gated(tmp_path: Path) -> None:
+    world = _world(tmp_path)
+    pr = world.github.prs[0]
+
+    gated = await world.pipeline(make_config(approval_required_authors=["octocat"])).review_one(
+        pr, force=False
+    )
+    ungated = await world.pipeline(make_config(approval_required_authors=["someone"])).run()
+
+    assert gated.action == Action.POSTED
+    assert ungated.outcomes[0].action == Action.ALREADY_HANDLED
+
+
+async def test_daily_limit_throttles_an_author_until_the_window_frees(tmp_path: Path) -> None:
+    world = _world(tmp_path, prs=[1, 2, 3])
+    config = make_config(daily_review_limits={"OctoCat": 2})
+
+    first = await world.pipeline(config).run()
+    world.clock.now += timedelta(hours=23)
+    second = await world.pipeline(config).run()
+    world.clock.now += timedelta(hours=1)
+    third = await world.pipeline(config).run()
+
+    assert sorted(o.action for o in first.outcomes) == sorted(
+        [Action.POSTED, Action.POSTED, Action.THROTTLED]
+    )
+    assert [o.action for o in second.outcomes if o.action != Action.ALREADY_HANDLED] == [
+        Action.THROTTLED
+    ]
+    assert [o.action for o in third.outcomes if o.action != Action.ALREADY_HANDLED] == [
+        Action.POSTED
+    ]
+    assert len(world.github.created) == 3
+    skipped = [n for n in world.notifier.sent if n.title == "Daily limit hit: octocat"]
+    assert len(skipped) == 1

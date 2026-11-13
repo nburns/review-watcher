@@ -60,7 +60,7 @@ class FeedbackWatcher:
         since = self._state.feedback_since()
         prs = [
             pr
-            for pr in await self._github.search_authored_prs(config.repos)
+            for pr in await self._github.search_authored_prs(config.repo_names)
             if config.allows_repo(pr.full_name)
         ]
         logger.info("feedback_discovered count=%d", len(prs))

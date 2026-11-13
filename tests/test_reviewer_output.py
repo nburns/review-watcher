@@ -30,6 +30,8 @@ def _ctx(*, with_changes: bool) -> ReviewContext:
         guidance_changes=GuidanceChanges(changes=changes),
         max_inline_comments=10,
         stack=None,
+        repo_instructions=[],
+        operational_context=[],
     )
 
 

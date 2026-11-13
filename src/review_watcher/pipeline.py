@@ -1,15 +1,19 @@
 import asyncio
 import logging
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from enum import StrEnum
+from pathlib import Path
 
+from review_watcher.auth import AuthGate
 from review_watcher.config import Config
+from review_watcher.context import ContextFetcher
 from review_watcher.diffmap import parse_diff
 from review_watcher.github import GitHubClient
 from review_watcher.guidance import collect_guidance
 from review_watcher.guidance_changes import collect_guidance_changes
+from review_watcher.launcher import CommandLauncher
 from review_watcher.logging_setup import log_step
 from review_watcher.models import (
     FinalReview,
@@ -50,6 +54,9 @@ class Action(StrEnum):
     POSTED = "posted"
     DRY_RUN = "dry_run"
     SKIPPED_EXISTING_PENDING = "skipped_existing_pending"
+    AWAITING_AUTH = "awaiting_auth"
+    AWAITING_APPROVAL = "awaiting_approval"
+    THROTTLED = "throttled"
     FAILED = "failed"
 
 
@@ -76,10 +83,16 @@ class Pipeline:
         reviewer: Reviewer,
         notifier: Notifier,
         state: StateStore,
+        auth: AuthGate,
+        context: ContextFetcher,
+        approval_launcher: CommandLauncher | None,
         clock: Callable[[], datetime],
         dry_run: bool,
     ) -> None:
         self._config = config
+        self._approval_launcher = approval_launcher
+        self._auth = auth
+        self._context = context
         self._github = github
         self._repos = repos
         self._reviewer = reviewer
@@ -91,7 +104,7 @@ class Pipeline:
     async def run(self) -> RunSummary:
         config = self._config
         found = await self._github.search_review_requests(
-            config.github_login, config.repos, config.include_team_requests
+            config.github_login, config.repo_names, config.include_team_requests
         )
         candidates: list[PullRequestRef] = []
         for pr in found:
@@ -109,12 +122,12 @@ class Pipeline:
         return RunSummary(outcomes=tuple(task.result() for task in tasks))
 
     async def review_one(self, pr: PullRequestRef, *, force: bool) -> RunOutcome:
-        return await self._process(pr, force=force, debounce=False)
+        return await self._process(pr, force=force, scheduled=False)
 
     async def _guarded(self, pr: PullRequestRef, semaphore: asyncio.Semaphore) -> RunOutcome:
         async with semaphore:
             try:
-                return await self._process(pr, force=False, debounce=True)
+                return await self._process(pr, force=False, scheduled=True)
             except Exception as exc:
                 logger.exception("pr_failed pr=%s", pr.slug)
                 # Timeouts reflect network or host slowness, not the PR: back off, never give up.
@@ -127,21 +140,19 @@ class Pipeline:
                 self._save_failure(pr, DEADLINE_CANCEL_ERROR, timed_out=True)
                 raise
 
-    async def _process(self, pr: PullRequestRef, *, force: bool, debounce: bool) -> RunOutcome:
-        config = self._config
+    async def _process(self, pr: PullRequestRef, *, force: bool, scheduled: bool) -> RunOutcome:
         record = self._state.get(pr.full_name, pr.number, pr.head_sha)
         if not force:
             skip = self._skip_action(pr, record)
             if skip is not None:
                 return RunOutcome(slug=pr.slug, action=skip)
 
-        now = self._clock()
         if record is None:
-            record = self._new_record(pr, ReviewStatus.PENDING_DEBOUNCE, now)
+            record = self._new_record(pr, ReviewStatus.PENDING_DEBOUNCE, self._clock())
             self._state.save(record)
-        if debounce and now - record.first_seen_at < timedelta(minutes=config.debounce_minutes):
-            logger.info("pr_debounced pr=%s first_seen=%s", pr.slug, record.first_seen_at)
-            return RunOutcome(slug=pr.slug, action=Action.DEBOUNCED)
+        waiting = await self._wait_action(pr, record, scheduled=scheduled)
+        if waiting is not None:
+            return RunOutcome(slug=pr.slug, action=waiting)
 
         final = await self._build_review(pr)
         if self._dry_run:
@@ -174,6 +185,56 @@ class Pipeline:
         )
         return RunOutcome(slug=pr.slug, action=Action.POSTED, final=final)
 
+    async def _wait_action(
+        self, pr: PullRequestRef, record: ReviewRecord, *, scheduled: bool
+    ) -> Action | None:
+        config = self._config
+        quiet = timedelta(minutes=config.debounce_minutes)
+        if scheduled and self._clock() - record.first_seen_at < quiet:
+            logger.info("pr_debounced pr=%s first_seen=%s", pr.slug, record.first_seen_at)
+            return Action.DEBOUNCED
+
+        if scheduled and self._awaiting_approval(pr):
+            if record.status != ReviewStatus.AWAITING_APPROVAL:
+                self._state.save(
+                    replace(record, status=ReviewStatus.AWAITING_APPROVAL, updated_at=self._clock())
+                )
+                await self._notify(self._approval_notification(pr))
+            logger.info("pr_awaiting_approval pr=%s author=%s", pr.slug, pr.author)
+            return Action.AWAITING_APPROVAL
+
+        sources = config.context_for(pr.full_name)
+        missing = await self._auth.missing(config.auth_for(sources))
+        if missing:
+            names = ",".join(auth.name for auth in missing)
+            self._state.save(
+                replace(record, status=ReviewStatus.AWAITING_AUTH, updated_at=self._clock())
+            )
+            logger.info("pr_awaiting_auth pr=%s auth=%s", pr.slug, names)
+            return Action.AWAITING_AUTH
+
+        if scheduled and not self._claim_review_slot(pr):
+            if record.status != ReviewStatus.THROTTLED:
+                self._state.save(
+                    replace(record, status=ReviewStatus.THROTTLED, updated_at=self._clock())
+                )
+                await self._notify(_throttled_notification(pr))
+            logger.info("pr_throttled pr=%s author=%s", pr.slug, pr.author)
+            return Action.THROTTLED
+        return None
+
+    def _claim_review_slot(self, pr: PullRequestRef) -> bool:
+        limit = self._config.daily_limit_for(pr.author)
+        if limit is None:
+            return True
+        return self._state.claim_review_slot(
+            repo=pr.full_name,
+            pr_number=pr.number,
+            head_sha=pr.head_sha,
+            author=pr.author,
+            limit=limit,
+        )
+
     def _skip_action(self, pr: PullRequestRef, record: ReviewRecord | None) -> Action | None:
         if record is not None:
             if record.status in SKIP_STATUSES:
@@ -203,11 +264,44 @@ class Pipeline:
                 return Action.REREVIEW_DISABLED
         return None
 
+    def _awaiting_approval(self, pr: PullRequestRef) -> bool:
+        if not self._config.requires_approval(pr.author):
+            return False
+        return not self._state.is_approved(pr.full_name, pr.number, pr.head_sha)
+
+    def _approval_notification(self, pr: PullRequestRef) -> Notification:
+        script = self._approval_script(pr)
+        if script is None:
+            action = f"Run: review-watcher approve {pr.url}"
+            open_url = pr.url
+        else:
+            action = "Click to queue the review."
+            open_url = script.as_uri()
+        return Notification(
+            title=f"Approve review? {pr.slug}",
+            message=f"{pr.author}: {pr.title}",
+            group=pr.slug,
+            open_url=open_url,
+            subtitle=action,
+        )
+
+    def _approval_script(self, pr: PullRequestRef) -> Path | None:
+        if self._approval_launcher is None:
+            return None
+        stem = f"approve-{pr.owner}-{pr.repo}-{pr.number}"
+        try:
+            return self._approval_launcher.write(stem, ["approve", pr.url])
+        except OSError:
+            logger.exception("approval_launcher_failed pr=%s", pr.slug)
+            return None
+
     async def _build_review(self, pr: PullRequestRef) -> FinalReview:
         config = self._config
         with log_step(logger, pr.slug, "diff"):
             diff_text = await self._github.get_diff(pr)
         diff = parse_diff(diff_text)
+        with log_step(logger, pr.slug, "context"):
+            operational = await self._context.fetch(pr, config.context_for(pr.full_name), diff_text)
         async with self._repos.worktree(pr) as worktree:
             with log_step(logger, pr.slug, "guidance"):
                 guidance_changes = await collect_guidance_changes(
@@ -227,6 +321,8 @@ class Pipeline:
                 guidance_changes=guidance_changes,
                 max_inline_comments=config.reviewer.max_inline_comments,
                 stack=stack,
+                repo_instructions=config.instructions_for(pr.full_name),
+                operational_context=operational,
             )
             with log_step(logger, pr.slug, "llm"):
                 draft = await self._reviewer.review(ctx)
@@ -422,6 +518,16 @@ def _review_notification(pr: PullRequestRef, final: FinalReview, *, dry_run: boo
         group=pr.slug,
         open_url=f"{pr.url}/files",
         subtitle=subtitle,
+    )
+
+
+def _throttled_notification(pr: PullRequestRef) -> Notification:
+    return Notification(
+        title=f"Daily limit hit: {pr.author}",
+        message=f"Skipped {pr.slug}: {pr.title}",
+        group=pr.slug,
+        open_url=pr.url,
+        subtitle="Reviewed automatically once a slot frees up",
     )
 
 

@@ -242,6 +242,16 @@ class StackContext(BaseModel):
     diff_truncated: bool
 
 
+class ContextResult(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    name: str
+    kind: str
+    text: str
+    truncated: bool
+    error: str | None
+
+
 class ReviewContext(BaseModel):
     model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True)
 
@@ -254,3 +264,5 @@ class ReviewContext(BaseModel):
     guidance_changes: GuidanceChanges
     max_inline_comments: int
     stack: StackContext | None
+    repo_instructions: list[str]
+    operational_context: list[ContextResult]

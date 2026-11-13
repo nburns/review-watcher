@@ -30,3 +30,5 @@ def test_plist_round_trips_with_expected_keys(tmp_path: Path) -> None:
     assert loaded_plist["ProgramArguments"][-1] == "run"
     assert loaded_plist["ProgramArguments"][1:3] == ["--config", str(loaded.config_path)]
     assert loaded_plist["EnvironmentVariables"]["PATH"].startswith("/opt/homebrew/bin:")
+    assert loaded_plist["ProcessType"] == "Standard"
+    assert "LowPriorityIO" not in loaded_plist

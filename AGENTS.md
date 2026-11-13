@@ -33,3 +33,6 @@ All four checks must pass clean before a change is done. Do not run `poe kick`, 
 - Git calls on repo content go through `RepoCache._git`, which applies the hardening `-c` flags and `GIT_LFS_SKIP_SMUDGE=1`.
 - Only `FinalReview` is posted to GitHub, and the posted review has no `event` field, so it stays PENDING.
 - Repo files are read from the PR head's git objects, not the working tree.
+- Auth `login` runs only from a user click or `auth-login`, never from the agent. Launchers in `var/auth` carry no `auth.env` values.
+- Operational context is fetched only in `context.py`, by deterministic code, and reaches the LLM as delimited data. Never give the reviewer tools to query logs or databases.
+- Database context is schema and row estimates only, via fixed SQL; config never supplies SQL. Secrets travel in env vars, never argv, prompts, or logs.

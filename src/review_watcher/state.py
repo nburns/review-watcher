@@ -7,6 +7,7 @@ from enum import StrEnum
 from pathlib import Path
 
 ERROR_NOTIFY_WINDOW = timedelta(hours=6)
+REVIEW_LIMIT_WINDOW = timedelta(hours=24)
 _FEEDBACK_SINCE_KEY = "feedback_since"
 
 _SCHEMA = """
@@ -38,6 +39,26 @@ CREATE TABLE IF NOT EXISTS meta (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS auth_state (
+    name TEXT PRIMARY KEY,
+    failing INTEGER NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS review_approvals (
+    repo TEXT NOT NULL,
+    pr_number INTEGER NOT NULL,
+    head_sha TEXT NOT NULL,
+    approved_at TEXT NOT NULL,
+    PRIMARY KEY (repo, pr_number, head_sha)
+);
+CREATE TABLE IF NOT EXISTS review_starts (
+    repo TEXT NOT NULL,
+    pr_number INTEGER NOT NULL,
+    head_sha TEXT NOT NULL,
+    author TEXT NOT NULL,
+    started_at TEXT NOT NULL,
+    PRIMARY KEY (repo, pr_number, head_sha)
+);
 CREATE TABLE IF NOT EXISTS error_notifications (
     error_key TEXT PRIMARY KEY,
     message TEXT NOT NULL,
@@ -50,6 +71,9 @@ class ReviewStatus(StrEnum):
     PENDING_DEBOUNCE = "pending_debounce"
     POSTED = "posted"
     SKIPPED_EXISTING_PENDING = "skipped_existing_pending"
+    AWAITING_AUTH = "awaiting_auth"
+    AWAITING_APPROVAL = "awaiting_approval"
+    THROTTLED = "throttled"
     FAILED = "failed"
 
 
@@ -150,6 +174,53 @@ class StateStore:
                 ),
             )
 
+    def approve(self, repo: str, pr_number: int, head_sha: str) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO review_approvals (repo, pr_number, head_sha, approved_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT (repo, pr_number, head_sha) DO NOTHING
+                """,
+                (repo, pr_number, head_sha, self._clock().isoformat()),
+            )
+
+    def is_approved(self, repo: str, pr_number: int, head_sha: str) -> bool:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT 1 FROM review_approvals WHERE repo = ? AND pr_number = ? AND head_sha = ?",
+                (repo, pr_number, head_sha),
+            ).fetchone()
+        return row is not None
+
+    def claim_review_slot(
+        self, *, repo: str, pr_number: int, head_sha: str, author: str, limit: int
+    ) -> bool:
+        """Record a review start for the author; False when the last 24h already hold limit."""
+        now = self._clock()
+        login = author.lower()
+        with self._connect() as connection:
+            claimed = connection.execute(
+                "SELECT 1 FROM review_starts WHERE repo = ? AND pr_number = ? AND head_sha = ?",
+                (repo, pr_number, head_sha),
+            ).fetchone()
+            if claimed is not None:
+                return True
+            row = connection.execute(
+                "SELECT COUNT(*) AS used FROM review_starts WHERE author = ? AND started_at > ?",
+                (login, (now - REVIEW_LIMIT_WINDOW).isoformat()),
+            ).fetchone()
+            if row["used"] >= limit:
+                return False
+            connection.execute(
+                """
+                INSERT INTO review_starts (repo, pr_number, head_sha, author, started_at)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (repo, pr_number, head_sha, login, now.isoformat()),
+            )
+        return True
+
     def should_notify_error(self, error_key: str, message: str) -> bool:
         now = self._clock()
         with self._connect() as connection:
@@ -171,6 +242,24 @@ class StateStore:
                 (error_key, message, now.isoformat()),
             )
         return True
+
+    def record_auth_check(self, name: str, *, ok: bool) -> bool:
+        """Store a check result; True only when this starts a new failing streak."""
+        now = self._clock()
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT failing FROM auth_state WHERE name = ?", (name,)
+            ).fetchone()
+            was_failing = row is not None and bool(row["failing"])
+            connection.execute(
+                """
+                INSERT INTO auth_state (name, failing, updated_at) VALUES (?, ?, ?)
+                ON CONFLICT (name) DO UPDATE SET failing = excluded.failing,
+                    updated_at = excluded.updated_at
+                """,
+                (name, int(not ok), now.isoformat()),
+            )
+        return not ok and not was_failing
 
     def feedback_since(self) -> datetime:
         """When feedback watching started; earlier feedback is treated as already seen."""
@@ -213,8 +302,12 @@ class StateStore:
     def prune(self, older_than: timedelta) -> int:
         cutoff = (self._clock() - older_than).isoformat()
         with self._connect() as connection:
-            cursor = connection.execute("DELETE FROM reviews WHERE updated_at < ?", (cutoff,))
-            return cursor.rowcount
+            reviews = connection.execute("DELETE FROM reviews WHERE updated_at < ?", (cutoff,))
+            approvals = connection.execute(
+                "DELETE FROM review_approvals WHERE approved_at < ?", (cutoff,)
+            )
+            starts = connection.execute("DELETE FROM review_starts WHERE started_at < ?", (cutoff,))
+            return reviews.rowcount + approvals.rowcount + starts.rowcount
 
 
 def utc_now() -> datetime:

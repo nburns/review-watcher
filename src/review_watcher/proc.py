@@ -93,3 +93,28 @@ async def run_command(
     if check and returncode != 0:
         raise CommandFailed(argv, returncode, stderr.decode("utf-8", errors="replace"))
     return result
+
+
+async def run_interactive(argv: Sequence[str], *, env: Mapping[str, str], timeout_s: float) -> int:
+    """Run with the caller's terminal attached and return the exit code."""
+    # Same session as the caller so Ctrl-C in the terminal reaches the child.
+    process = await asyncio.create_subprocess_exec(*argv, env=dict(env))
+    try:
+        returncode = await asyncio.wait_for(process.wait(), timeout=timeout_s)
+    except TimeoutError:
+        _kill(process)
+        await process.wait()
+        raise CommandTimeout(argv, timeout_s) from None
+    except asyncio.CancelledError:
+        _kill(process)
+        await process.wait()
+        raise
+    return returncode
+
+
+def _kill(process: asyncio.subprocess.Process) -> None:
+    try:
+        process.kill()
+    except ProcessLookupError:
+        # Process already exited between timeout and kill.
+        return

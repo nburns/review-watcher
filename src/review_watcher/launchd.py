@@ -52,8 +52,8 @@ def build_plist(
         "StandardOutPath": str(log_dir / "launchd.out.log"),
         "StandardErrorPath": str(log_dir / "launchd.err.log"),
         "EnvironmentVariables": {"PATH": path_env, "HOME": str(home)},
-        "ProcessType": "Background",
-        "LowPriorityIO": True,
+        # Background priority throttles disk I/O; a large checkout went from 6s to 137s+.
+        "ProcessType": "Standard",
     }
 
 

@@ -1,12 +1,13 @@
 import asyncio
 import shutil
 import subprocess
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from review_watcher.config import Config
+from review_watcher.config import Config, ContextSource
 from review_watcher.models import (
+    ContextResult,
     FeedbackItem,
     FinalReview,
     PostedReview,
@@ -91,6 +92,22 @@ class FakeNotifier:
 
     async def notify(self, notification: Notification) -> None:
         self.sent.append(notification)
+
+
+@dataclass
+class FakeContextFetcher:
+    calls: list[list[str]] = field(default_factory=list)
+
+    async def fetch(
+        self, pr: PullRequestRef, sources: Mapping[str, ContextSource], diff_text: str
+    ) -> list[ContextResult]:
+        self.calls.append(list(sources))
+        return [
+            ContextResult(
+                name=name, kind=source.kind, text=f"{name} data", truncated=False, error=None
+            )
+            for name, source in sources.items()
+        ]
 
 
 class FakeRepoCache(RepoCache):

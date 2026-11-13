@@ -8,6 +8,7 @@ from review_watcher.models import (
     SEVERITY_RANK,
     Category,
     Confidence,
+    ContextResult,
     FinalReview,
     Finding,
     GuidanceChange,
@@ -259,6 +260,8 @@ def _render_body(
         sections.append(_guidance_banner(ctx.pr, ctx.guidance_changes, draft))
     if ctx.stack is not None:
         sections.append(_stack_note(ctx.pr, ctx.stack))
+    if ctx.operational_context:
+        sections.append(_context_note(ctx.operational_context))
     sections.append(_risk_section(final_risk, model_risk, floor_reasons, draft))
     sections.append(_severity_table(draft.findings))
     sections.append("### Summary\n\n" + _neutralize(draft.summary))
@@ -279,6 +282,18 @@ def _render_body(
         sections.append(f"Guidance sources used: {sources}")
     sections.append(f"{MARKER_PREFIX}{ctx.pr.head_sha} -->")
     return "\n\n".join(sections)
+
+
+def _context_note(results: Sequence[ContextResult]) -> str:
+    items: list[str] = []
+    for result in results:
+        if result.error is not None:
+            items.append(f"`{_cell(result.name)}` (**unavailable**: {_cell(result.error)})")
+        elif result.truncated:
+            items.append(f"`{_cell(result.name)}` (truncated)")
+        else:
+            items.append(f"`{_cell(result.name)}`")
+    return "> Operational context: " + ", ".join(items)
 
 
 def _stack_note(pr: PullRequestRef, stack: StackContext) -> str:
