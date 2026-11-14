@@ -4,6 +4,7 @@ github_login = "your-github-login"
 # Only PRs in these repos are considered. Empty lists are rejected.
 # An entry is either "owner/name" or a table with extra review instructions, one sentence each.
 # Built-in lenses default to ["sre"]; set lenses = [] on a table entry to turn them off.
+# base_branches lists long-lived branches (e.g. release branches) that PRs into are not stacks.
 repos = [
     "owner/name",
     { name = "owner/other", context = ["prod-logs"], instructions = [
