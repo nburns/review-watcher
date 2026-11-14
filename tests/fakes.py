@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from review_watcher.config import Config, ContextSource
+from review_watcher.github import PullRequestWithState, RepositoryInfo
 from review_watcher.models import (
     ContextResult,
     FeedbackItem,
@@ -33,6 +34,9 @@ class FakeGitHub:
         self.authored: list[PullRequestRef] = []
         self.feedback: dict[int, list[FeedbackItem]] = {}
         self.open_by_head: dict[str, list[PullRequestRef]] = {}
+        self.linked: dict[str, PullRequestWithState] = {}
+        self.linked_diffs: dict[str, str] = {}
+        self.repositories: dict[str, RepositoryInfo] = {}
 
     async def search_review_requests(
         self, login: str, repos: Sequence[str], include_team_requests: bool
@@ -48,13 +52,21 @@ class FakeGitHub:
     async def fetch_pull_request(self, owner: str, repo: str, number: int) -> PullRequestRef:
         raise NotImplementedError
 
+    async def fetch_pull_request_with_state(
+        self, owner: str, repo: str, number: int
+    ) -> PullRequestWithState:
+        return self.linked[f"{owner}/{repo}#{number}"]
+
+    async def fetch_repository(self, full_name: str) -> RepositoryInfo:
+        return self.repositories[full_name]
+
     async def list_open_prs_with_head(
         self, owner: str, repo: str, branch: str
     ) -> list[PullRequestRef]:
         return list(self.open_by_head.get(branch, []))
 
     async def get_diff(self, pr: PullRequestRef) -> str:
-        return self.diff_text
+        return self.linked_diffs.get(pr.slug.lower(), self.diff_text)
 
     async def list_reviews(self, pr: PullRequestRef) -> list[ReviewSummary]:
         return list(self.reviews.get(pr.number, []))
@@ -115,6 +127,11 @@ class FakeRepoCache(RepoCache):
 
     async def ensure_fetched(self, pr: PullRequestRef) -> None:
         return None
+
+    async def _fetch_branch(self, bare: Path, branch: str) -> str:
+        ref = f"refs/rw/base/{branch}"
+        git(bare, "update-ref", ref, f"refs/heads/{branch}")
+        return ref
 
 
 def git(cwd: Path, *args: str) -> str:
@@ -181,6 +198,7 @@ def make_pr(
     is_draft: bool = False,
     head_ref: str | None = None,
     base_ref: str = "main",
+    body: str | None = None,
 ) -> PullRequestRef:
     return PullRequestRef(
         owner="acme",
@@ -195,6 +213,7 @@ def make_pr(
         title=f"PR {number}",
         author="octocat",
         is_draft=is_draft,
+        body=body,
     )
 
 
@@ -216,6 +235,7 @@ def empty_draft(**overrides: object) -> ReviewDraft:
         "risk_rationale": "Small change.",
         "findings": [],
         "guidance_sources_used": [],
+        "related_sources_used": [],
         "guidance_change_assessment": None,
         "questions_for_author": [],
     }

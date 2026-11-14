@@ -61,6 +61,7 @@ def _ctx(max_inline: int = 10, changed: tuple[str, ...] = ("src/app.py",)) -> Re
         stack=None,
         repo_instructions=[],
         operational_context=[],
+        related=None,
     )
 
 

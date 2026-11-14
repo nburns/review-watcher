@@ -36,6 +36,7 @@ async def _guidance_with_links(tmp_path: Path, links: dict[str, str]) -> ReviewG
         git_binary=Path(GIT),
         bare_root=repo.bare_root,
         worktree_root=tmp_path / "wt",
+        related_root=tmp_path / "related",
     )
     diff = parse_diff(diff_between(repo, base, head))
     return await collect_guidance(cache, make_pr(1, head, base), diff, GuidanceConfig())

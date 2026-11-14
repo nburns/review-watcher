@@ -38,6 +38,7 @@ async def _changes_for(
         git_binary=Path(GIT),
         bare_root=repo.bare_root,
         worktree_root=tmp_path / "wt",
+        related_root=tmp_path / "related",
     )
     diff = parse_diff(diff_between(repo, base, head))
     result = await collect_guidance_changes(cache, pr, diff, GuidanceWatchConfig())
@@ -82,7 +83,10 @@ async def test_mismatch_between_git_and_pr_diff_raises(tmp_path: Path) -> None:
     head = commit_files(repo, {**BASE_FILES, "pkg/code.py": "x = 2\n"})
     publish(repo)
     cache = FakeRepoCache(
-        git_binary=Path(GIT), bare_root=repo.bare_root, worktree_root=tmp_path / "wt"
+        git_binary=Path(GIT),
+        bare_root=repo.bare_root,
+        worktree_root=tmp_path / "wt",
+        related_root=tmp_path / "related",
     )
     unrelated = parse_diff("")
     with pytest.raises(GuidanceMismatch):

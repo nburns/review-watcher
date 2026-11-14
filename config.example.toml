@@ -25,6 +25,7 @@ approval_required_authors = []
 # At most this many automatic reviews per author in any rolling 24 hours. Extra PRs are
 # marked throttled and reviewed once the window frees up. Keys are GitHub logins.
 daily_review_limits = {}       # e.g. { some-login = 10 }
+related_max_age_hours = 12     # refresh a shared related-repo checkout once older than this
 sensitive_paths = [
     "**/migrations/**",
     "**/auth/**",
@@ -97,6 +98,19 @@ name = "gcloud"
 check = ["gcloud", "auth", "print-access-token", "--quiet"]
 hint = "Run gcloud auth login, then finish sign-in in the browser"
 login = ["gcloud", "auth", "login"]
+
+# Related repos: each review of a group member gets read-only checkouts of the other members
+# and the diffs of PRs in them that the PR body references (owner/repo#N or a PR URL).
+# Every group member needs a repo_info description; members need not be in `repos`.
+
+[repo_info."owner/name"]
+description = "What lives in this repo, in one line."
+
+[repo_info."owner/other"]
+description = "What lives in this repo, in one line."
+
+[[related]]
+repos = ["owner/name", "owner/other"]
 
 # Context sources: gcloud_logs, aws_logs, mysql_schema, hoop_schema. See README.
 [context.prod-logs]

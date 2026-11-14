@@ -54,6 +54,7 @@ class NullReviewer:
             risk_rationale="No review was performed.",
             findings=[],
             guidance_sources_used=[],
+            related_sources_used=[],
             guidance_change_assessment=assessment,
             questions_for_author=[],
         )
@@ -93,7 +94,12 @@ def build_claude_argv(
     config: ReviewerConfig,
     schema_json: str,
     system_prompt: str,
+    read_dirs: Sequence[Path],
 ) -> list[str]:
+    for directory in read_dirs:
+        if not directory.is_absolute():
+            raise LockdownViolation(f"read-only dir must be absolute: {directory}")
+    extra = [arg for directory in read_dirs for arg in ("--add-dir", str(directory))]
     return [
         str(binary),
         "-p",
@@ -115,6 +121,7 @@ def build_claude_argv(
         "",
         "--disable-slash-commands",
         "--no-session-persistence",
+        *extra,
         "--append-system-prompt",
         system_prompt,
     ]
@@ -181,12 +188,14 @@ class ClaudeCliReviewer:
             stacked=ctx.stack is not None,
             repo_instructions=ctx.repo_instructions,
             has_context=bool(ctx.operational_context),
+            has_related=ctx.related is not None,
         )
         argv = build_claude_argv(
             binary=self._binary,
             config=self._config,
             schema_json=rubric.output_schema_json(),
             system_prompt=system_prompt,
+            read_dirs=[] if ctx.related is None else ctx.related.readable_paths,
         )
         assert_lockdown(argv)
         result = await run_command(

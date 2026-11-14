@@ -25,6 +25,7 @@ from review_watcher.models import (
 from review_watcher.notifier import Notification, Notifier, notify_logging_failures
 from review_watcher.postprocess import MARKER_PREFIX, finalize, fold_inline_into_body
 from review_watcher.proc import CommandFailed, CommandTimeout
+from review_watcher.related import RelatedCollector
 from review_watcher.repo_cache import RepoCache
 from review_watcher.reviewer import Reviewer
 from review_watcher.state import ReviewRecord, ReviewStatus, StateStore
@@ -100,6 +101,7 @@ class Pipeline:
         self._state = state
         self._clock = clock
         self._dry_run = dry_run
+        self._related = RelatedCollector(config=config, github=github, repos=repos, clock=clock)
 
     async def run(self) -> RunSummary:
         config = self._config
@@ -302,6 +304,8 @@ class Pipeline:
         diff = parse_diff(diff_text)
         with log_step(logger, pr.slug, "context"):
             operational = await self._context.fetch(pr, config.context_for(pr.full_name), diff_text)
+        with log_step(logger, pr.slug, "related"):
+            related = await self._related.collect(pr)
         async with self._repos.worktree(pr) as worktree:
             with log_step(logger, pr.slug, "guidance"):
                 guidance_changes = await collect_guidance_changes(
@@ -323,6 +327,7 @@ class Pipeline:
                 stack=stack,
                 repo_instructions=config.instructions_for(pr.full_name),
                 operational_context=operational,
+                related=related,
             )
             with log_step(logger, pr.slug, "llm"):
                 draft = await self._reviewer.review(ctx)

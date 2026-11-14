@@ -3,6 +3,7 @@ import json
 import logging
 import re
 from collections.abc import Awaitable, Callable, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol, cast
 
@@ -37,6 +38,7 @@ query($q: String!) {
         number
         url
         title
+        body
         isDraft
         headRefOid
         headRefName
@@ -55,6 +57,18 @@ class GitHubError(RuntimeError):
     pass
 
 
+@dataclass(frozen=True)
+class RepositoryInfo:
+    full_name: str
+    default_branch: str
+
+
+@dataclass(frozen=True)
+class PullRequestWithState:
+    pr: PullRequestRef
+    state: str
+
+
 class GitHubClient(Protocol):
     async def search_review_requests(
         self, login: str, repos: Sequence[str], include_team_requests: bool
@@ -65,6 +79,12 @@ class GitHubClient(Protocol):
     async def list_feedback(self, pr: PullRequestRef) -> list[FeedbackItem]: ...
 
     async def fetch_pull_request(self, owner: str, repo: str, number: int) -> PullRequestRef: ...
+
+    async def fetch_pull_request_with_state(
+        self, owner: str, repo: str, number: int
+    ) -> PullRequestWithState: ...
+
+    async def fetch_repository(self, full_name: str) -> RepositoryInfo: ...
 
     async def list_open_prs_with_head(
         self, owner: str, repo: str, branch: str
@@ -206,6 +226,17 @@ class GhCliGitHub:
         data = await self._api_json([f"repos/{owner}/{repo}/pulls/{number}"])
         return _pr_from_rest(data, owner, repo)
 
+    async def fetch_pull_request_with_state(
+        self, owner: str, repo: str, number: int
+    ) -> PullRequestWithState:
+        data = await self._api_json([f"repos/{owner}/{repo}/pulls/{number}"])
+        state = "merged" if data["merged_at"] is not None else data["state"]
+        return PullRequestWithState(pr=_pr_from_rest(data, owner, repo), state=state)
+
+    async def fetch_repository(self, full_name: str) -> RepositoryInfo:
+        data = await self._api_json([f"repos/{full_name}"])
+        return RepositoryInfo(full_name=data["full_name"], default_branch=data["default_branch"])
+
     async def list_open_prs_with_head(
         self, owner: str, repo: str, branch: str
     ) -> list[PullRequestRef]:
@@ -315,6 +346,7 @@ def _pr_from_rest(data: dict[str, Any], owner: str, repo: str) -> PullRequestRef
         title=data["title"],
         author=_login(data["user"]),
         is_draft=data["draft"],
+        body=data["body"],
     )
 
 
@@ -334,4 +366,5 @@ def _pr_from_search_node(node: dict[str, Any]) -> PullRequestRef:
         title=node["title"],
         author=author,
         is_draft=node["isDraft"],
+        body=node["body"],
     )

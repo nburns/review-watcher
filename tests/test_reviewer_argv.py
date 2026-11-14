@@ -12,6 +12,7 @@ def _argv() -> list[str]:
         config=ReviewerConfig(),
         schema_json="{}",
         system_prompt="rubric",
+        read_dirs=[],
     )
 
 

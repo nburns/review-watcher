@@ -89,6 +89,7 @@ class PullRequestRef(BaseModel):
     title: str
     author: str
     is_draft: bool
+    body: str | None
 
     @property
     def full_name(self) -> str:
@@ -126,6 +127,7 @@ class ReviewDraft(BaseModel):
     risk_rationale: str
     findings: list[Finding]
     guidance_sources_used: list[str]
+    related_sources_used: list[str]
     guidance_change_assessment: str | None
     questions_for_author: list[str]
 
@@ -252,6 +254,64 @@ class ContextResult(BaseModel):
     error: str | None
 
 
+class RelatedGuide(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    path: str
+    text: str
+    truncated: bool
+
+
+class RelatedCheckout(BaseModel):
+    model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True)
+
+    path: Path
+    branch: str
+    commit_sha: str
+    committed_at: datetime
+    guide: RelatedGuide | None
+
+
+class RelatedRepo(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    full_name: str
+    description: str
+    checkout: RelatedCheckout | None
+    error: str | None
+
+
+class LinkedPullRequest(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    full_name: str
+    number: int
+    title: str
+    state: str
+    url: str
+    diff_text: str
+    diff_truncated: bool
+
+
+class LinkFailure(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    reference: str
+    error: str
+
+
+class RelatedContext(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    repos: list[RelatedRepo]
+    linked_prs: list[LinkedPullRequest]
+    link_failures: list[LinkFailure]
+
+    @property
+    def readable_paths(self) -> list[Path]:
+        return [repo.checkout.path for repo in self.repos if repo.checkout is not None]
+
+
 class ReviewContext(BaseModel):
     model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True)
 
@@ -266,3 +326,4 @@ class ReviewContext(BaseModel):
     stack: StackContext | None
     repo_instructions: list[str]
     operational_context: list[ContextResult]
+    related: RelatedContext | None

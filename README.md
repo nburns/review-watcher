@@ -6,6 +6,8 @@ It also watches your own open PRs in the same repos and notifies you when someon
 
 A stacked PR (one whose base is not the repo's default branch) is reviewed with the full default-branch-to-head diff as context, plus the open PRs below it in the stack. Findings and inline comments stay on the PR's own changes; interactions with lower PRs are anchored in this PR and reference the other PR by number.
 
+A repo can be grouped with related repos (`[[related]]`). Each review of a group member gets read-only checkouts of the other members' default branches, a short map of each (its `repo_info` description and root `AGENTS.md`, `CLAUDE.md`, or `README.md`), and the diffs of up to five PRs in those repos that the PR body references as `owner/repo#N` or a PR URL. The reviewer decides which related files to read; findings stay on the PR's own diff and cite the other repo, and the review body lists the related files it used. Checkouts live in `var/related/<owner>/<repo>`, are shared by all reviews, and are refreshed at most once per cycle when older than `related_max_age_hours`. A related repo that cannot be fetched does not block the review; the body marks it unavailable.
+
 The LLM is used only for the review step. Discovery, diffing, guidance collection, risk policy, posting, and state are plain deterministic Python.
 
 ## Setup
@@ -30,7 +32,7 @@ Then grant notification permission to terminal-notifier in System Settings > Not
 | `approve <pr-url>` | Approve reviewing a gated author's PR at its current head; the next cycle reviews it |
 | `status` | List review-requested PRs and their recorded state |
 | `install-agent` / `uninstall-agent` | Manage the LaunchAgent |
-| `prune` | Delete state older than 90 days and orphaned worktrees |
+| `prune` | Delete state older than 90 days, orphaned worktrees, and checkouts of repos no longer in a `[[related]]` group |
 | `auth-login <name>` | Run an `[[auth]]` entry's `login` in this terminal, then re-check |
 
 Global options: `--config PATH`, `--dry-run` (no posting, prints the review JSON for `review`), `--no-llm` (skip claude), `--verbose`.
@@ -55,6 +57,7 @@ CI (`.github/workflows/ci.yml`) runs `poe check` on macOS for pushes to `main` a
 - Review guidance (`AGENTS.md`, `CLAUDE.md`, `.claude/skills`, and similar files) comes from the PR head's git objects. It is injected as delimited data with a random per-run delimiter. The review cannot remove built-in checks, lower severities, or approve.
 - A PR that changes review or agent configuration (`guidance_watch` globs) gets a visible banner, a minimum risk floor (`medium` for review guidance, `high` for settings, hooks, and MCP config), and a `CONFIG CHANGED` notification title.
 - Git runs with `core.hooksPath=/dev/null`, `protocol.file.allow=never`, `submodule.recurse=false`, and `GIT_LFS_SKIP_SMUDGE=1`. Submodules are never fetched.
+- Related repos are read-only directories added with `--add-dir`; the tool set stays `Read,Grep,Glob`. Only repos in the same `[[related]]` group are checked out. PR references in the body to any other repo are logged and ignored, so a PR author cannot make the watcher clone arbitrary repos. Related guides and linked PR diffs are injected as delimited data, read from git objects.
 - Reviews are posted as PENDING. You submit them yourself on GitHub.
 - Operational context (logs, database schema) is fetched by plain Python in `context.py` before the review and injected as delimited, untrusted data. The LLM gets no new tools. Database access is schema and approximate row counts only, through fixed queries in a read-only session; table names come from the database itself. Credentials go through environment variables (`MYSQL_PWD`), never argv, the prompt, or logs. Log text is grouped and redacted (emails, bearer tokens, JWTs, AWS keys, long hex and base64) on a best-effort basis, and the rubric forbids quoting log lines or data values.
 

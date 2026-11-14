@@ -15,6 +15,7 @@ from review_watcher.models import (
     GuidanceChanges,
     InlineComment,
     PullRequestRef,
+    RelatedContext,
     ReviewContext,
     ReviewDraft,
     RiskLevel,
@@ -262,6 +263,8 @@ def _render_body(
         sections.append(_stack_note(ctx.pr, ctx.stack))
     if ctx.operational_context:
         sections.append(_context_note(ctx.operational_context))
+    if ctx.related is not None:
+        sections.append(_related_note(ctx.related))
     sections.append(_risk_section(final_risk, model_risk, floor_reasons, draft))
     sections.append(_severity_table(draft.findings))
     sections.append("### Summary\n\n" + _neutralize(draft.summary))
@@ -280,6 +283,9 @@ def _render_body(
     if draft.guidance_sources_used:
         sources = ", ".join(_neutralize(s) for s in draft.guidance_sources_used)
         sections.append(f"Guidance sources used: {sources}")
+    if draft.related_sources_used:
+        sources = ", ".join(f"`{_cell(s)}`" for s in draft.related_sources_used)
+        sections.append(f"Related sources used: {sources}")
     sections.append(f"{MARKER_PREFIX}{ctx.pr.head_sha} -->")
     return "\n\n".join(sections)
 
@@ -294,6 +300,24 @@ def _context_note(results: Sequence[ContextResult]) -> str:
         else:
             items.append(f"`{_cell(result.name)}`")
     return "> Operational context: " + ", ".join(items)
+
+
+def _related_note(related: RelatedContext) -> str:
+    items: list[str] = []
+    for repo in related.repos:
+        if repo.checkout is None:
+            items.append(f"`{_cell(repo.full_name)}` (**unavailable**: {_cell(repo.error or '')})")
+        else:
+            items.append(f"`{_cell(repo.full_name)}@{repo.checkout.commit_sha[:12]}`")
+    items.extend(
+        f"{_cell(linked.full_name)}#{linked.number} ({linked.state})"
+        for linked in related.linked_prs
+    )
+    items.extend(
+        f"{_cell(failure.reference)} (**unavailable**: {_cell(failure.error)})"
+        for failure in related.link_failures
+    )
+    return "> Related context: " + ", ".join(items)
 
 
 def _stack_note(pr: PullRequestRef, stack: StackContext) -> str:

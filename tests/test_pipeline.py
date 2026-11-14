@@ -59,6 +59,7 @@ class World:
             git_binary=Path(GIT),
             bare_root=self.repo.bare_root,
             worktree_root=self.repo.bare_root.parent / "wt",
+            related_root=self.repo.bare_root.parent / "related",
         )
         return Pipeline(
             config=config,
@@ -307,6 +308,7 @@ async def test_repo_instructions_reach_the_review_prompt(tmp_path: Path) -> None
         stacked=False,
         repo_instructions=ctx.repo_instructions,
         has_context=False,
+        has_related=False,
     )
     assert "- Check the migrations." in prompt
 

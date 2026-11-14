@@ -93,6 +93,15 @@ def _load(opts: Options) -> LoadedConfig:
     return loaded
 
 
+def _repo_cache(loaded: LoadedConfig, git_binary: Path) -> RepoCache:
+    return RepoCache(
+        git_binary=git_binary,
+        bare_root=loaded.var_dir / "repos",
+        worktree_root=loaded.var_dir / "worktrees",
+        related_root=loaded.var_dir / "related",
+    )
+
+
 async def _build_runtime(opts: Options, loaded: LoadedConfig) -> Runtime:
     settings = loaded.settings
     git_binary = resolve_binary("git")
@@ -111,11 +120,7 @@ async def _build_runtime(opts: Options, loaded: LoadedConfig) -> Runtime:
     else:
         notifier = OsascriptNotifier(resolve_binary("osascript"))
 
-    repos = RepoCache(
-        git_binary=git_binary,
-        bare_root=loaded.var_dir / "repos",
-        worktree_root=loaded.var_dir / "worktrees",
-    )
+    repos = _repo_cache(loaded, git_binary)
     github = GhCliGitHub(gh_binary)
     state = StateStore(loaded.var_dir / "state.db", clock=utc_now)
     program = launchd.venv_program(loaded)
@@ -167,6 +172,7 @@ class CycleResult:
 async def _run_cycle(opts: Options, loaded: LoadedConfig) -> CycleResult:
     runtime = await _build_runtime(opts, loaded)
     await runtime.repos.prune()
+    await runtime.repos.prune_related(loaded.settings.all_related)
     # A run may outlast the interval; the run lock makes the next tick skip instead of overlap.
     deadline_s = max(
         loaded.settings.interval_minutes * 60 - 60, loaded.settings.reviewer.timeout_s + 300
@@ -318,12 +324,13 @@ def prune_command(ctx: typer.Context) -> None:
     loaded = _load(opts)
     state = StateStore(loaded.var_dir / "state.db", clock=utc_now)
     removed = state.prune(STATE_RETENTION)
-    repos = RepoCache(
-        git_binary=resolve_binary("git"),
-        bare_root=loaded.var_dir / "repos",
-        worktree_root=loaded.var_dir / "worktrees",
-    )
-    asyncio.run(repos.prune())
+    repos = _repo_cache(loaded, resolve_binary("git"))
+
+    async def _prune() -> None:
+        await repos.prune()
+        await repos.prune_related(loaded.settings.all_related)
+
+    asyncio.run(_prune())
     typer.echo(f"pruned state_rows={removed} worktrees=removed")
 
 

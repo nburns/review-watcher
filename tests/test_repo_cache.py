@@ -27,7 +27,10 @@ def _stale_locked_worktree(tmp_path: Path) -> _Stale:
     publish(repo)
     worktree_root = tmp_path / "wt"
     cache = FakeRepoCache(
-        git_binary=Path(GIT), bare_root=repo.bare_root, worktree_root=worktree_root
+        git_binary=Path(GIT),
+        bare_root=repo.bare_root,
+        worktree_root=worktree_root,
+        related_root=tmp_path / "related",
     )
     stale = worktree_root / f"acme-app-1-{head[:12]}"
     git(

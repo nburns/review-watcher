@@ -117,9 +117,7 @@ class RepoConfig(_StrictModel):
     @field_validator("name")
     @classmethod
     def _validate_name(cls, name: str) -> str:
-        if not REPO_SLUG_RE.fullmatch(name):
-            raise ValueError(f"repo must be 'owner/name': {name!r}")
-        return name.lower()
+        return _normalize_slug(name)
 
     @field_validator("instructions")
     @classmethod
@@ -128,6 +126,28 @@ class RepoConfig(_StrictModel):
         if any(sentence == "" for sentence in cleaned):
             raise ValueError("instructions contains an empty sentence")
         return cleaned
+
+
+def _normalize_slug(name: str) -> str:
+    if not REPO_SLUG_RE.fullmatch(name):
+        raise ValueError(f"repo must be 'owner/name': {name!r}")
+    return name.lower()
+
+
+class RepoInfo(_StrictModel):
+    description: str = Field(min_length=1)
+
+
+class RelatedGroup(_StrictModel):
+    repos: list[str] = Field(min_length=2)
+
+    @field_validator("repos")
+    @classmethod
+    def _validate_repos(cls, repos: list[str]) -> list[str]:
+        normalized = [_normalize_slug(name) for name in repos]
+        if len(set(normalized)) != len(normalized):
+            raise ValueError("related group lists the same repo more than once")
+        return normalized
 
 
 class ReviewerConfig(_StrictModel):
@@ -189,6 +209,17 @@ class Config(_StrictModel):
     paths: PathsConfig = Field(default_factory=PathsConfig)
     auth: list[AuthConfig] = Field(default_factory=list)
     context: dict[str, ContextSource] = Field(default_factory=dict)
+    repo_info: dict[str, RepoInfo] = Field(default_factory=dict)
+    related: list[RelatedGroup] = Field(default_factory=list)
+    related_max_age_hours: int = Field(default=12, ge=0)
+
+    @field_validator("repo_info")
+    @classmethod
+    def _normalize_repo_info(cls, info: dict[str, RepoInfo]) -> dict[str, RepoInfo]:
+        normalized = {_normalize_slug(name): item for name, item in info.items()}
+        if len(normalized) != len(info):
+            raise ValueError("repo_info lists the same repo more than once")
+        return normalized
 
     @field_validator("repos", mode="before")
     @classmethod
@@ -239,6 +270,12 @@ class Config(_StrictModel):
             missing = [name for name in repo.context if name not in self.context]
             if missing:
                 raise ValueError(f"repo {repo.name} uses unknown context: {', '.join(missing)}")
+        for group in self.related:
+            undescribed = [name for name in group.repos if name not in self.repo_info]
+            if undescribed:
+                raise ValueError(
+                    f"related repos need a repo_info description: {', '.join(undescribed)}"
+                )
         return self
 
     @property
@@ -256,6 +293,24 @@ class Config(_StrictModel):
 
     def context_for(self, full_name: str) -> dict[str, ContextSource]:
         return {name: self.context[name] for name in self._repo(full_name).context}
+
+    def related_for(self, full_name: str) -> list[str]:
+        name = full_name.lower()
+        found = {
+            other
+            for group in self.related
+            if name in group.repos
+            for other in group.repos
+            if other != name
+        }
+        return sorted(found)
+
+    @property
+    def all_related(self) -> set[str]:
+        return {name for group in self.related for name in group.repos}
+
+    def describe_repo(self, full_name: str) -> str:
+        return self.repo_info[full_name.lower()].description
 
     def auth_for(self, sources: dict[str, ContextSource]) -> list[AuthConfig]:
         needed = {name for source in sources.values() for name in source.auth}
