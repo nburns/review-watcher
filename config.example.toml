@@ -3,6 +3,7 @@
 github_login = "your-github-login"
 # Only PRs in these repos are considered. Empty lists are rejected.
 # An entry is either "owner/name" or a table with extra review instructions, one sentence each.
+# Built-in lenses default to ["sre"]; set lenses = [] on a table entry to turn them off.
 repos = [
     "owner/name",
     { name = "owner/other", context = ["prod-logs"], instructions = [
@@ -42,8 +43,8 @@ max_diff_bytes = 200000
 
 [guidance]
 extra_paths = []
-max_file_bytes = 60000
-max_total_bytes = 200000
+max_file_bytes = 100000
+max_total_bytes = 500000
 
 [guidance_watch]
 # Defaults shown; override only to change what counts as review or agent configuration.

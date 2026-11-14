@@ -62,3 +62,30 @@ async def test_symlink_outside_repo_is_skipped(tmp_path: Path) -> None:
     guidance = await _guidance_with_links(tmp_path, links)
 
     assert [(f.path, f.text) for f in guidance.files] == [("pkg/CLAUDE.md", "pkg rules\n")]
+
+
+async def test_review_skills_take_the_budget_before_other_skills(tmp_path: Path) -> None:
+    repo = make_local_repo(tmp_path)
+    files = {
+        **BASE_FILES,
+        ".claude/skills/aaa-compliance/SKILL.md": "c" * 400,
+        ".claude/skills/sre-review/SKILL.md": "sre lenses\n",
+    }
+    base = commit_files(repo, files)
+    head = commit_files(repo, {**files, "pkg/code.py": "x = 2\n"})
+    publish(repo)
+    cache = FakeRepoCache(
+        git_binary=Path(GIT),
+        bare_root=repo.bare_root,
+        worktree_root=tmp_path / "wt",
+        related_root=tmp_path / "related",
+    )
+    diff = parse_diff(diff_between(repo, base, head))
+
+    guidance = await collect_guidance(
+        cache, make_pr(1, head, base), diff, GuidanceConfig(max_total_bytes=21)
+    )
+
+    paths = [f.path for f in guidance.files]
+    assert paths == ["pkg/CLAUDE.md", ".claude/skills/sre-review/SKILL.md"]
+    assert guidance.omitted_paths == [".claude/skills/aaa-compliance/SKILL.md"]

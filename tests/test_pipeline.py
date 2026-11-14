@@ -309,6 +309,7 @@ async def test_repo_instructions_reach_the_review_prompt(tmp_path: Path) -> None
         repo_instructions=ctx.repo_instructions,
         has_context=False,
         has_related=False,
+        lenses=[],
     )
     assert "- Check the migrations." in prompt
 

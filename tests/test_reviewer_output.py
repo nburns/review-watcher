@@ -33,6 +33,7 @@ def _ctx(*, with_changes: bool) -> ReviewContext:
         repo_instructions=[],
         operational_context=[],
         related=None,
+        lenses=[],
     )
 
 

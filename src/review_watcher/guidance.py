@@ -51,6 +51,13 @@ def _is_candidate(path: str, touched_dirs: frozenset[str], extra_paths: list[str
     return any(posix.full_match(pattern) for pattern in extra_paths)
 
 
+def _priority(path: str) -> int:
+    # The total budget is spent in this order, so review skills outrank e.g. compliance skills.
+    if path.startswith(".claude/"):
+        return 1 if "review" in path.lower() else 2
+    return 0
+
+
 async def _resolve_link(
     repo: RepoCache,
     pr: PullRequestRef,
@@ -85,7 +92,7 @@ async def collect_guidance(
     tree = await repo.list_tree(pr)
     candidates = sorted(
         (entry for entry in tree if _is_candidate(entry.path, touched, config.extra_paths)),
-        key=lambda entry: entry.path,
+        key=lambda entry: (_priority(entry.path), entry.path),
     )
 
     by_path = {entry.path: entry for entry in tree}

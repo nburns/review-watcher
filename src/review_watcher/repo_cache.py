@@ -221,6 +221,12 @@ class RepoCache:
     async def read_related_blob(self, full_name: str, sha: str, entry: TreeEntry) -> bytes:
         return await self._read_blob_in(self._bare_for(full_name), sha, entry)
 
+    async def read_path_at(self, full_name: str, sha: str, path: str) -> bytes:
+        result = await self._git(
+            ["-C", str(self._bare_for(full_name)), "cat-file", "blob", f"{sha}:{path}"]
+        )
+        return result.stdout
+
     async def _rev_parse(self, repo: Path, ref: str) -> str:
         result = await self._git(["-C", str(repo), "rev-parse", "--verify", f"{ref}^{{commit}}"])
         return result.stdout.decode().strip()

@@ -8,6 +8,7 @@ from pydantic import ValidationError
 from review_watcher.auth import AuthChecker
 from review_watcher.config import Config, ReviewerConfig
 from review_watcher.github import PullRequestWithState, RepositoryInfo
+from review_watcher.models import Quote
 from review_watcher.pipeline import Action, Pipeline
 from review_watcher.related import find_references
 from review_watcher.reviewer import LockdownViolation, assert_lockdown, build_claude_argv
@@ -133,8 +134,8 @@ class _World:
 
 def _world(tmp_path: Path, body: str) -> _World:
     app = make_local_repo(tmp_path / "app")
-    base = commit_files(app, {"src/app.py": "a = 1\n"})
-    head = commit_files(app, {"src/app.py": "a = 2\n"})
+    base = commit_files(app, {"src/app.py": "total = compute(1)\n"})
+    head = commit_files(app, {"src/app.py": "total = compute(2)\n"})
     publish(app)
     lib_root = tmp_path / "lib"
     lib_root.mkdir()
@@ -241,3 +242,62 @@ async def test_prune_removes_checkouts_no_longer_related(tmp_path: Path) -> None
     await world.cache.prune_related(set())
     assert not path.exists()
     assert not world.cache.related_stamp_path("acme/lib").exists()
+
+
+def _quoted(path: str, quote: Quote | None, confidence: str = "high") -> dict[str, object]:
+    return {
+        "severity": "major",
+        "category": "reliability",
+        "path": path,
+        "line": 1,
+        "side": "RIGHT",
+        "start_line": None,
+        "title": f"title for {quote.path if quote else 'none'}",
+        "body": "details",
+        "evidence": "read it",
+        "quote": None if quote is None else quote.model_dump(),
+        "confidence": confidence,
+    }
+
+
+async def test_findings_without_verifiable_quotes_become_questions(tmp_path: Path) -> None:
+    world = _world(tmp_path, "")
+    world.reviewer.draft = empty_draft(
+        findings=[
+            _quoted("src/app.py", Quote(path="src/app.py", text="  total = compute(2)  ")),
+            _quoted(
+                "src/app.py", Quote(path="Acme/Lib:schema/tenant.json", text='"people": "url"')
+            ),
+            _quoted("src/app.py", Quote(path="src/app.py", text="invented line of code")),
+            _quoted("src/app.py", Quote(path="evil/repo:x.py", text="anything at all")),
+            _quoted("src/app.py", None),
+            _quoted("src/app.py", None, confidence="low"),
+        ]
+    )
+
+    await world.pipeline(make_config(**RELATED)).run()
+
+    review = world.github.created[0]
+    posted = review.body + "".join(comment.body for comment in review.inline_comments)
+    assert "title for src/app.py" in posted
+    assert "title for Acme/Lib:schema/tenant.json" in posted
+    assert "quoted evidence was not found in src/app.py" in review.body
+    assert "cites an unknown repository (evil/repo:x.py)" in review.body
+    assert "Not posted as a finding: no quoted evidence" in review.body
+    assert review.body.count("Not posted as a finding") == 3
+    assert "| major | 3 |" in review.body
+
+
+async def test_sre_lens_is_on_by_default_and_can_be_turned_off(tmp_path: Path) -> None:
+    world = _world(tmp_path, "")
+    await world.pipeline(make_config(**RELATED)).run()
+    no_lens: dict[str, object] = {"name": "acme/app", "lenses": []}
+    await world.pipeline(make_config(**{**RELATED, "repos": [no_lens]})).review_one(
+        world.github.prs[0], force=True
+    )
+
+    on, off = world.reviewer.contexts
+    assert len(on.lenses) == 1
+    assert on.lenses[0].startswith("Operational lens")
+    assert "<!--" not in on.lenses[0]
+    assert off.lenses == []
