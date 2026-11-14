@@ -26,7 +26,7 @@ def _ctx(*, with_changes: bool) -> ReviewContext:
         diff_truncated=False,
         changed_files=[],
         worktree_path=Path("/unused"),
-        guidance=ReviewGuidance(files=[], omitted_paths=[]),
+        guidance=ReviewGuidance(files=[], omitted_paths=[], skills=[]),
         guidance_changes=GuidanceChanges(changes=changes),
         max_inline_comments=10,
         stack=None,

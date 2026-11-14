@@ -144,7 +144,14 @@ def _world(tmp_path: Path, body: str) -> _World:
         work=lib_root / "work", bare=app.bare_root / "acme" / "lib.git", bare_root=app.bare_root
     )
     git(lib.work, "init", "-q", "-b", "main")
-    commit_files(lib, {"AGENTS.md": "lib guide\n", "schema/tenant.json": '{"people": "url"}\n'})
+    commit_files(
+        lib,
+        {
+            "AGENTS.md": "lib guide\n",
+            "schema/tenant.json": '{"people": "url"}\n',
+            ".claude/skills/sre-review/SKILL.md": "---\nname: sre\ndescription: Ops.\n---\n",
+        },
+    )
     publish(lib)
     github = FakeGitHub([make_pr(1, head, base, body=body)], diff_between(app, base, head))
     github.repositories["acme/lib"] = RepositoryInfo(full_name="acme/lib", default_branch="main")
@@ -185,6 +192,9 @@ async def test_review_sees_related_checkout_guide_and_linked_pr(tmp_path: Path) 
     assert (checkout.path / "schema" / "tenant.json").read_text() == '{"people": "url"}\n'
     assert checkout.guide is not None
     assert checkout.guide.text == "lib guide\n"
+    assert [(s.path, s.name, s.description) for s in checkout.skills] == [
+        (".claude/skills/sre-review", "sre", "Ops.")
+    ]
     assert [(pr.number, pr.state) for pr in related.linked_prs] == [(471, "merged")]
     assert related.readable_paths == [checkout.path]
     body = world.github.created[0].body

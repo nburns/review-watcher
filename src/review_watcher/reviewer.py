@@ -203,11 +203,13 @@ class ClaudeCliReviewer:
         )
         assert_lockdown(argv)
         user_prompt = rubric.build_user_prompt(ctx, nonce).encode("utf-8")
+        sections = " ".join(f"{k}={v}" for k, v in rubric.section_sizes(ctx, nonce).items())
         logger.info(
-            "review_prompt pr=%s system_bytes=%d user_bytes=%d",
+            "review_prompt pr=%s system_bytes=%d user_bytes=%d %s",
             ctx.pr.slug,
             len(system_prompt.encode("utf-8")),
             len(user_prompt),
+            sections,
         )
         result = await run_command(
             argv,

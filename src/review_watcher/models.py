@@ -167,11 +167,21 @@ class GuidanceFile(BaseModel):
     pr_diff: str | None
 
 
+class SkillSummary(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    path: str
+    name: str | None
+    description: str | None
+    file_count: int
+
+
 class ReviewGuidance(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     files: list[GuidanceFile]
     omitted_paths: list[str]
+    skills: list[SkillSummary]
 
 
 class InlineComment(BaseModel):
@@ -280,6 +290,7 @@ class RelatedCheckout(BaseModel):
     commit_sha: str
     committed_at: datetime
     guide: RelatedGuide | None
+    skills: list[SkillSummary]
 
 
 class RelatedRepo(BaseModel):

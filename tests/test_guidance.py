@@ -64,15 +64,22 @@ async def test_symlink_outside_repo_is_skipped(tmp_path: Path) -> None:
     assert [(f.path, f.text) for f in guidance.files] == [("pkg/CLAUDE.md", "pkg rules\n")]
 
 
-async def test_review_skills_take_the_budget_before_other_skills(tmp_path: Path) -> None:
+async def test_only_review_and_changed_skills_are_inlined_others_are_indexed(
+    tmp_path: Path,
+) -> None:
     repo = make_local_repo(tmp_path)
+    sitemap = "---\nname: sitemap\ndescription: >\n  Frontend\n  page map.\n---\nbody\n"
     files = {
         **BASE_FILES,
-        ".claude/skills/aaa-compliance/SKILL.md": "c" * 400,
+        ".claude/skills/sitemap/SKILL.md": sitemap,
+        ".claude/skills/sitemap/trees/Dashboard.md": "huge tree\n",
+        ".claude/skills/seed/SKILL.md": "no frontmatter\n",
         ".claude/skills/sre-review/SKILL.md": "sre lenses\n",
     }
     base = commit_files(repo, files)
-    head = commit_files(repo, {**files, "pkg/code.py": "x = 2\n"})
+    head = commit_files(
+        repo, {**files, "pkg/code.py": "x = 2\n", ".claude/skills/seed/SKILL.md": "changed\n"}
+    )
     publish(repo)
     cache = FakeRepoCache(
         git_binary=Path(GIT),
@@ -82,10 +89,16 @@ async def test_review_skills_take_the_budget_before_other_skills(tmp_path: Path)
     )
     diff = parse_diff(diff_between(repo, base, head))
 
-    guidance = await collect_guidance(
-        cache, make_pr(1, head, base), diff, GuidanceConfig(max_total_bytes=21)
-    )
+    guidance = await collect_guidance(cache, make_pr(1, head, base), diff, GuidanceConfig())
 
-    paths = [f.path for f in guidance.files]
-    assert paths == ["pkg/CLAUDE.md", ".claude/skills/sre-review/SKILL.md"]
-    assert guidance.omitted_paths == [".claude/skills/aaa-compliance/SKILL.md"]
+    assert [f.path for f in guidance.files] == [
+        ".claude/skills/seed/SKILL.md",
+        "pkg/CLAUDE.md",
+        ".claude/skills/sre-review/SKILL.md",
+    ]
+    assert guidance.files[0].modified_in_pr
+    assert [(s.path, s.name, s.description, s.file_count) for s in guidance.skills] == [
+        (".claude/skills/seed", None, None, 1),
+        (".claude/skills/sitemap", "sitemap", "Frontend page map.", 2),
+        (".claude/skills/sre-review", None, None, 1),
+    ]

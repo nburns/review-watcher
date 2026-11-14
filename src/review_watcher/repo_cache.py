@@ -218,6 +218,12 @@ class RepoCache:
         result = await self._git(["-C", str(self._bare_for(full_name)), "ls-tree", "-z", sha])
         return _parse_tree(result.stdout)
 
+    async def list_related_tree(self, full_name: str, sha: str, prefix: str) -> list[TreeEntry]:
+        result = await self._git(
+            ["-C", str(self._bare_for(full_name)), "ls-tree", "-r", "-z", sha, "--", prefix]
+        )
+        return _parse_tree(result.stdout)
+
     async def read_related_blob(self, full_name: str, sha: str, entry: TreeEntry) -> bytes:
         return await self._read_blob_in(self._bare_for(full_name), sha, entry)
 

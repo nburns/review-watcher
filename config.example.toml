@@ -27,6 +27,7 @@ approval_required_authors = []
 # marked throttled and reviewed once the window frees up. Keys are GitHub logins.
 daily_review_limits = {}       # e.g. { some-login = 10 }
 related_max_age_hours = 12     # refresh a shared related-repo checkout once older than this
+related_guide_max_bytes = 20000  # cap on each related repo's AGENTS.md/CLAUDE.md/README.md
 sensitive_paths = [
     "**/migrations/**",
     "**/auth/**",
