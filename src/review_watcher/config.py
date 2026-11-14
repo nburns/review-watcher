@@ -215,6 +215,7 @@ class Config(_StrictModel):
     repo_info: dict[str, RepoInfo] = Field(default_factory=dict)
     related: list[RelatedGroup] = Field(default_factory=list)
     related_max_age_hours: int = Field(default=12, ge=0)
+    related_guide_max_bytes: int = Field(default=20_000, gt=0)
 
     @field_validator("repo_info")
     @classmethod

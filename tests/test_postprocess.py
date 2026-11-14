@@ -56,7 +56,7 @@ def _ctx(max_inline: int = 10, changed: tuple[str, ...] = ("src/app.py",)) -> Re
         diff_truncated=False,
         changed_files=list(changed),
         worktree_path=Path("/unused"),
-        guidance=ReviewGuidance(files=[], omitted_paths=[]),
+        guidance=ReviewGuidance(files=[], omitted_paths=[], skills=[]),
         guidance_changes=GuidanceChanges(changes=[]),
         max_inline_comments=max_inline,
         stack=None,

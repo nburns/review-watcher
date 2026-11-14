@@ -8,6 +8,7 @@ from review_watcher.models import (
     ReviewContext,
     ReviewDraft,
     ReviewGuidance,
+    SkillSummary,
     StackContext,
 )
 
@@ -107,10 +108,30 @@ def _delimited(tag: str, nonce: str, body: str) -> str:
     return f"<<<BEGIN {tag} {nonce}>>>\n{body}\n<<<END {tag} {nonce}>>>"
 
 
+def _render_skill_index(skills: Sequence[SkillSummary], source: str) -> str:
+    lines: list[str] = []
+    for skill in skills:
+        label = skill.name or skill.path.rsplit("/", 1)[-1]
+        description = skill.description or "(no description)"
+        lines.append(f"- {skill.path} ({label}, {skill.file_count} files): {description}")
+    return f"source: skill index for {source}\n" + "\n".join(lines)
+
+
 def _render_guidance(guidance: ReviewGuidance, head_sha: str, nonce: str) -> str:
-    if not guidance.files:
-        return "No repository guidance files were found at the PR head."
     parts: list[str] = []
+    if guidance.skills:
+        parts.append(
+            "Skills at the PR head, index only. Read a skill's files under its path when it "
+            "applies to this change:\n"
+            + _delimited(
+                "SKILL_INDEX",
+                nonce,
+                _render_skill_index(guidance.skills, f"PR head {head_sha[:12]}"),
+            )
+        )
+    if not guidance.files:
+        parts.append("No repository guidance files were found at the PR head.")
+        return "\n\n".join(parts)
     for file in guidance.files:
         header = f"source: PR head {head_sha[:12]}, path: {file.path}"
         if file.truncated:
@@ -231,6 +252,14 @@ def _render_related(related: RelatedContext, nonce: str) -> str:
             if guide.truncated:
                 header += ", truncated"
             parts.append(_delimited("RELATED_GUIDE", nonce, f"{header}\n{guide.text}"))
+        if checkout.skills:
+            parts.append(
+                _delimited(
+                    "SKILL_INDEX",
+                    nonce,
+                    _render_skill_index(checkout.skills, f"{repo.full_name} at {checkout.path}"),
+                )
+            )
     for linked in related.linked_prs:
         truncation = ", TRUNCATED to the size limit" if linked.diff_truncated else ""
         header = f"Linked PR {linked.full_name}#{linked.number} ({linked.state}){truncation}:"
@@ -239,6 +268,20 @@ def _render_related(related: RelatedContext, nonce: str) -> str:
     for failure in related.link_failures:
         parts.append(f"Linked PR {failure.reference} is unavailable: {failure.error}")
     return "\n\n".join(parts)
+
+
+def section_sizes(ctx: ReviewContext, nonce: str) -> dict[str, int]:
+    rendered = {
+        "guidance": _render_guidance(ctx.guidance, ctx.pr.head_sha, nonce),
+        "lenses": "\n\n".join(ctx.lenses),
+        "diff": ctx.diff_text,
+        "stack": "" if ctx.stack is None else _render_stack(ctx.stack, nonce),
+        "context": _render_context(ctx.operational_context, nonce)
+        if ctx.operational_context
+        else "",
+        "related": "" if ctx.related is None else _render_related(ctx.related, nonce),
+    }
+    return {name: len(text.encode("utf-8")) for name, text in rendered.items()}
 
 
 def build_user_prompt(ctx: ReviewContext, nonce: str) -> str:

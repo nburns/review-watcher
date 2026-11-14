@@ -19,9 +19,11 @@ from review_watcher.models import (
     RelatedRepo,
 )
 from review_watcher.repo_cache import CheckoutState, GitError, RepoCache
+from review_watcher.skills import summarize_skills
 
 MAX_LINKED_PRS = 5
 GUIDE_NAMES: tuple[str, ...] = ("AGENTS.md", "CLAUDE.md", "README.md")
+SKILLS_DIR = ".claude/skills"
 _SHORT_REF_RE = re.compile(r"(?<![\w./-])([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)#(\d+)\b")
 _URL_REF_RE = re.compile(r"https://github\.com/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)/pull/(\d+)")
 
@@ -125,6 +127,10 @@ class RelatedCollector:
             commit_sha=state.commit_sha,
             committed_at=state.committed_at,
             guide=await self._guide(name, state.commit_sha),
+            skills=await summarize_skills(
+                await self._repos.list_related_tree(name, state.commit_sha, SKILLS_DIR),
+                lambda entry: self._repos.read_related_blob(name, state.commit_sha, entry),
+            ),
         )
 
     async def _current_or_refresh(self, name: str) -> "_Located":
@@ -151,7 +157,7 @@ class RelatedCollector:
             if entry is None or not entry.is_blob:
                 continue
             raw = await self._repos.read_related_blob(name, sha, entry)
-            budget = self._config.guidance.max_file_bytes
+            budget = self._config.related_guide_max_bytes
             return RelatedGuide(
                 path=guide_name,
                 text=raw[:budget].decode("utf-8", errors="replace"),

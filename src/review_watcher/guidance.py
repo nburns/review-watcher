@@ -6,6 +6,7 @@ from review_watcher.config import GuidanceConfig
 from review_watcher.diffmap import DiffMap
 from review_watcher.models import GuidanceFile, PullRequestRef, ReviewGuidance
 from review_watcher.repo_cache import RepoCache, TreeEntry
+from review_watcher.skills import SKILLS_PREFIX, is_review_skill_file, summarize_skills
 
 _MAX_LINK_HOPS = 8
 
@@ -38,10 +39,13 @@ def _touched_dirs(changed_files: tuple[str, ...]) -> frozenset[str]:
     return frozenset(dirs)
 
 
-def _is_candidate(path: str, touched_dirs: frozenset[str], extra_paths: list[str]) -> bool:
+def _is_candidate(
+    path: str, touched_dirs: frozenset[str], changed: frozenset[str], extra_paths: list[str]
+) -> bool:
     posix = PurePosixPath(path)
-    if path.startswith(".claude/skills/") and posix.suffix == ".md":
-        return True
+    if path.startswith(SKILLS_PREFIX):
+        # Other skills reach the prompt as an index; the reviewer reads them on demand.
+        return posix.suffix == ".md" and (is_review_skill_file(path) or path in changed)
     if path.startswith(".claude/commands/") and "review" in posix.stem.lower():
         return True
     if posix.name in _INSTRUCTION_FILE_NAMES and _parent_dir(posix) in touched_dirs:
@@ -51,11 +55,11 @@ def _is_candidate(path: str, touched_dirs: frozenset[str], extra_paths: list[str
     return any(posix.full_match(pattern) for pattern in extra_paths)
 
 
-def _priority(path: str) -> int:
-    # The total budget is spent in this order, so review skills outrank e.g. compliance skills.
-    if path.startswith(".claude/"):
-        return 1 if "review" in path.lower() else 2
-    return 0
+def _priority(path: str, changed: frozenset[str]) -> int:
+    # The total budget is spent in this order, so review skills outrank other agent files.
+    if path in changed or not path.startswith(".claude/"):
+        return 0
+    return 1 if "review" in path.lower() else 2
 
 
 async def _resolve_link(
@@ -91,8 +95,12 @@ async def collect_guidance(
     touched = _touched_dirs(changed)
     tree = await repo.list_tree(pr)
     candidates = sorted(
-        (entry for entry in tree if _is_candidate(entry.path, touched, config.extra_paths)),
-        key=lambda entry: (_priority(entry.path), entry.path),
+        (
+            entry
+            for entry in tree
+            if _is_candidate(entry.path, touched, frozenset(changed), config.extra_paths)
+        ),
+        key=lambda entry: (_priority(entry.path, frozenset(changed)), entry.path),
     )
 
     by_path = {entry.path: entry for entry in tree}
@@ -126,4 +134,5 @@ async def collect_guidance(
                 pr_diff=diff.files[entry.path].text if modified else None,
             )
         )
-    return ReviewGuidance(files=files, omitted_paths=omitted)
+    skills = await summarize_skills(tree, lambda entry: repo.read_blob(pr, entry))
+    return ReviewGuidance(files=files, omitted_paths=omitted, skills=skills)
