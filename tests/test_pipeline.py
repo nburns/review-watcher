@@ -274,6 +274,12 @@ async def test_stacked_pr_gets_full_default_branch_diff_as_context(tmp_path: Pat
     assert "src/upper.py" in ctx.stack.diff_text
     assert "Stacked PR: merges into `feature-1` on top of #1" in github.created[0].body
 
+    github.open_by_head.clear()
+    await world.pipeline(make_config()).review_one(pr, force=True)
+
+    assert world.reviewer.contexts[1].stack is None
+    assert "Stacked PR" not in github.created[1].body
+
 
 async def test_review_cancelled_by_run_deadline_backs_off(tmp_path: Path) -> None:
     world = _world(tmp_path)
