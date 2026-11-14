@@ -316,7 +316,8 @@ class Pipeline:
                 guidance = await collect_guidance(self._repos, pr, diff, config.guidance)
             clipped, truncated = _clip_diff(diff_text, config.reviewer.max_diff_bytes)
             with log_step(logger, pr.slug, "stack"):
-                stack = await self._stack_context(pr) if pr.is_stacked else None
+                stacked = pr.is_stacked and not config.is_base_branch(pr.full_name, pr.base_ref)
+                stack = await self._stack_context(pr) if stacked else None
             ctx = ReviewContext(
                 pr=pr,
                 diff_text=clipped,
@@ -362,7 +363,11 @@ class Pipeline:
         ancestors: list[PullRequestRef] = []
         seen = {pr.number}
         branch = pr.base_ref
-        while branch != pr.default_branch and len(ancestors) < MAX_STACK_DEPTH:
+        while (
+            branch != pr.default_branch
+            and not self._config.is_base_branch(pr.full_name, branch)
+            and len(ancestors) < MAX_STACK_DEPTH
+        ):
             parents = await self._github.list_open_prs_with_head(pr.owner, pr.repo, branch)
             if len(parents) != 1 or parents[0].number in seen:
                 logger.info(

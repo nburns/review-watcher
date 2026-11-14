@@ -116,6 +116,7 @@ class RepoConfig(_StrictModel):
     instructions: list[str] = Field(default_factory=list)
     context: list[str] = Field(default_factory=list)
     lenses: list[LensName] = Field(default_factory=lambda: ["sre"])
+    base_branches: list[str] = Field(default_factory=list)
 
     @field_validator("name")
     @classmethod
@@ -294,6 +295,9 @@ class Config(_StrictModel):
 
     def instructions_for(self, full_name: str) -> list[str]:
         return list(self._repo(full_name).instructions)
+
+    def is_base_branch(self, full_name: str, branch: str) -> bool:
+        return branch in self._repo(full_name).base_branches
 
     def lenses_for(self, full_name: str) -> list[LensName]:
         return list(self._repo(full_name).lenses)
