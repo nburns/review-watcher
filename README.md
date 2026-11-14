@@ -8,6 +8,12 @@ A stacked PR (one whose base is not the repo's default branch) is reviewed with 
 
 A repo can be grouped with related repos (`[[related]]`). Each review of a group member gets read-only checkouts of the other members' default branches, a short map of each (its `repo_info` description and root `AGENTS.md`, `CLAUDE.md`, or `README.md`), and the diffs of up to five PRs in those repos that the PR body references as `owner/repo#N` or a PR URL. The reviewer decides which related files to read; findings stay on the PR's own diff and cite the other repo, and the review body lists the related files it used. Checkouts live in `var/related/<owner>/<repo>`, are shared by all reviews, and are refreshed at most once per cycle when older than `related_max_age_hours`. A related repo that cannot be fetched does not block the review; the body marks it unavailable.
 
+Every review also applies a built-in operational lens (`src/review_watcher/lenses/sre.md`): failure handling, blast radius, capacity, detectability, health checks, deploy and rollback safety, worker lifecycle, and telemetry cost. It is routed through the repo's own system map and operational docs when they exist, so it works in repos without such skills. Turn it off per repo with `lenses = []`.
+
+High and medium confidence findings must quote one verbatim line from the file they rely on. The quote is checked against git objects (PR head or base, or the related checkout's commit). A finding whose quote is missing or not found is moved to "Questions for the author" instead of being posted as a finding.
+
+Repo guidance is loaded in priority order until `max_total_bytes` is spent: instruction files and root guidance first, then review skills (`.claude/**` paths containing "review"), then other skills.
+
 The LLM is used only for the review step. Discovery, diffing, guidance collection, risk policy, posting, and state are plain deterministic Python.
 
 ## Setup

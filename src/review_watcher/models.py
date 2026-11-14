@@ -54,6 +54,8 @@ class Category(StrEnum):
     CONCURRENCY = "concurrency"
     READABILITY = "readability"
     DOCS = "docs"
+    RELIABILITY = "reliability"
+    OBSERVABILITY = "observability"
 
 
 class Confidence(StrEnum):
@@ -104,6 +106,13 @@ class PullRequestRef(BaseModel):
         return self.base_ref != self.default_branch
 
 
+class Quote(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    path: str
+    text: str
+
+
 class Finding(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -116,6 +125,7 @@ class Finding(BaseModel):
     title: str
     body: str
     evidence: str
+    quote: Quote | None
     confidence: Confidence
 
 
@@ -327,3 +337,4 @@ class ReviewContext(BaseModel):
     repo_instructions: list[str]
     operational_context: list[ContextResult]
     related: RelatedContext | None
+    lenses: list[str]

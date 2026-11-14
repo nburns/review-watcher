@@ -31,6 +31,7 @@ All four checks must pass clean before a change is done. Do not run `poe kick`, 
 - The LLM is used only in `reviewer.py`. An AST test enforces that no other module references the `claude` binary.
 - The `claude` argv must keep every lockdown flag and must never contain `--bare`. `assert_lockdown` enforces this at call time.
 - Git calls on repo content go through `RepoCache._git`, which applies the hardening `-c` flags and `GIT_LFS_SKIP_SMUDGE=1`.
+- A finding is posted only if its quote is verified in git objects by `grounding.py`; otherwise it becomes a question.
 - Only `FinalReview` is posted to GitHub, and the posted review has no `event` field, so it stays PENDING.
 - Repo files are read from the PR head's git objects, not the working tree. Related repo guides are read from git objects at the checkout commit.
 - Related repos come only from `[[related]]` groups in config. PR body references never add a repo outside the PR's groups. They reach the reviewer only as `--add-dir` read-only directories and delimited data, never as new tools.

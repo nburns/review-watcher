@@ -6,6 +6,8 @@ from typing import Annotated, Literal, cast
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from review_watcher.lenses import LensName
+
 REPO_SLUG_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 
 DEFAULT_REVIEW_GUIDANCE_GLOBS: tuple[str, ...] = (
@@ -113,6 +115,7 @@ class RepoConfig(_StrictModel):
     name: str
     instructions: list[str] = Field(default_factory=list)
     context: list[str] = Field(default_factory=list)
+    lenses: list[LensName] = Field(default_factory=lambda: ["sre"])
 
     @field_validator("name")
     @classmethod
@@ -161,8 +164,8 @@ class ReviewerConfig(_StrictModel):
 
 class GuidanceConfig(_StrictModel):
     extra_paths: list[str] = Field(default_factory=list)
-    max_file_bytes: int = Field(default=60_000, gt=0)
-    max_total_bytes: int = Field(default=200_000, gt=0)
+    max_file_bytes: int = Field(default=100_000, gt=0)
+    max_total_bytes: int = Field(default=500_000, gt=0)
 
 
 class GuidanceWatchConfig(_StrictModel):
@@ -290,6 +293,9 @@ class Config(_StrictModel):
 
     def instructions_for(self, full_name: str) -> list[str]:
         return list(self._repo(full_name).instructions)
+
+    def lenses_for(self, full_name: str) -> list[LensName]:
+        return list(self._repo(full_name).lenses)
 
     def context_for(self, full_name: str) -> dict[str, ContextSource]:
         return {name: self.context[name] for name in self._repo(full_name).context}

@@ -11,9 +11,11 @@ from review_watcher.config import Config
 from review_watcher.context import ContextFetcher
 from review_watcher.diffmap import parse_diff
 from review_watcher.github import GitHubClient
+from review_watcher.grounding import ground_findings
 from review_watcher.guidance import collect_guidance
 from review_watcher.guidance_changes import collect_guidance_changes
 from review_watcher.launcher import CommandLauncher
+from review_watcher.lenses import load_lens
 from review_watcher.logging_setup import log_step
 from review_watcher.models import (
     FinalReview,
@@ -328,9 +330,12 @@ class Pipeline:
                 repo_instructions=config.instructions_for(pr.full_name),
                 operational_context=operational,
                 related=related,
+                lenses=[load_lens(name) for name in config.lenses_for(pr.full_name)],
             )
             with log_step(logger, pr.slug, "llm"):
                 draft = await self._reviewer.review(ctx)
+            with log_step(logger, pr.slug, "grounding"):
+                draft = await ground_findings(draft, ctx, self._repos)
         return finalize(
             draft=draft,
             ctx=ctx,

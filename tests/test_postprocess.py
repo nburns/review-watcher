@@ -44,6 +44,7 @@ def _finding(
         title=title,
         body="details",
         evidence="read the code",
+        quote=None,
         confidence=confidence,
     )
 
@@ -62,6 +63,7 @@ def _ctx(max_inline: int = 10, changed: tuple[str, ...] = ("src/app.py",)) -> Re
         repo_instructions=[],
         operational_context=[],
         related=None,
+        lenses=[],
     )
 
 

@@ -1,4 +1,5 @@
 import json
+import logging
 import secrets
 import shutil
 from collections.abc import Sequence
@@ -11,6 +12,8 @@ from review_watcher import rubric
 from review_watcher.config import ReviewerConfig
 from review_watcher.models import ReviewContext, ReviewDraft, RiskLevel
 from review_watcher.proc import base_env, run_command
+
+logger = logging.getLogger(__name__)
 
 CLAUDE_MIN_VERSION: tuple[int, int, int] = (2, 1, 311)
 CLAUDE_TIMEOUT_S = 30.0
@@ -189,6 +192,7 @@ class ClaudeCliReviewer:
             repo_instructions=ctx.repo_instructions,
             has_context=bool(ctx.operational_context),
             has_related=ctx.related is not None,
+            lenses=ctx.lenses,
         )
         argv = build_claude_argv(
             binary=self._binary,
@@ -198,11 +202,18 @@ class ClaudeCliReviewer:
             read_dirs=[] if ctx.related is None else ctx.related.readable_paths,
         )
         assert_lockdown(argv)
+        user_prompt = rubric.build_user_prompt(ctx, nonce).encode("utf-8")
+        logger.info(
+            "review_prompt pr=%s system_bytes=%d user_bytes=%d",
+            ctx.pr.slug,
+            len(system_prompt.encode("utf-8")),
+            len(user_prompt),
+        )
         result = await run_command(
             argv,
             env=self._env,
             timeout_s=self._config.timeout_s,
             cwd=ctx.worktree_path,
-            stdin=rubric.build_user_prompt(ctx, nonce).encode("utf-8"),
+            stdin=user_prompt,
         )
         return parse_review_output(result.stdout, ctx)
