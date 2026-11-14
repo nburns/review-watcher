@@ -343,8 +343,12 @@ class Pipeline:
             sensitive_paths=config.sensitive_paths,
         )
 
-    async def _stack_context(self, pr: PullRequestRef) -> StackContext:
+    async def _stack_context(self, pr: PullRequestRef) -> StackContext | None:
         ancestors = await self._stack_ancestors(pr)
+        if not ancestors:
+            # A long-lived base branch (e.g. a release branch) is not a stack; its diff is noise.
+            logger.info("stack_skipped reason=no_open_parent pr=%s base=%s", pr.slug, pr.base_ref)
+            return None
         full_diff = await self._repos.default_branch_diff(pr)
         clipped, truncated = _clip_diff(full_diff, self._config.reviewer.max_diff_bytes)
         return StackContext(
