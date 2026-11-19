@@ -414,5 +414,4 @@ async def test_daily_limit_throttles_an_author_until_the_window_frees(tmp_path: 
         Action.POSTED
     ]
     assert len(world.github.created) == 3
-    skipped = [n for n in world.notifier.sent if n.title == "Daily limit hit: octocat"]
-    assert len(skipped) == 1
+    assert not [n for n in world.notifier.sent if "limit" in n.title.lower()]

@@ -27,7 +27,7 @@ class TerminalNotifierNotifier:
     def __init__(self, binary: Path) -> None:
         self._binary = str(binary)
 
-    async def notify(self, notification: Notification) -> None:
+    def argv(self, notification: Notification) -> list[str]:
         argv = [
             self._binary,
             "-title",
@@ -41,7 +41,10 @@ class TerminalNotifierNotifier:
             argv.extend(["-subtitle", _escape(notification.subtitle)])
         if notification.open_url is not None:
             argv.extend(["-open", notification.open_url])
-        await run_command(argv, env=base_env(), timeout_s=NOTIFY_TIMEOUT_S)
+        return argv
+
+    async def notify(self, notification: Notification) -> None:
+        await run_command(self.argv(notification), env=base_env(), timeout_s=NOTIFY_TIMEOUT_S)
 
 
 def _escape(text: str) -> str:
@@ -55,25 +58,30 @@ class OsascriptNotifier:
     def __init__(self, binary: Path) -> None:
         self._binary = str(binary)
 
+    def argv(self, notification: Notification) -> list[str]:
+        return [
+            self._binary,
+            "-e",
+            "on run argv",
+            "-e",
+            "display notification (item 2 of argv) with title (item 1 of argv)",
+            "-e",
+            "end run",
+            "--",
+            notification.title,
+            notification.message,
+        ]
+
     async def notify(self, notification: Notification) -> None:
         if notification.open_url is not None:
             logger.info("notification_url url=%s", notification.open_url)
-        await run_command(
-            [
-                self._binary,
-                "-e",
-                "on run argv",
-                "-e",
-                "display notification (item 2 of argv) with title (item 1 of argv)",
-                "-e",
-                "end run",
-                "--",
-                notification.title,
-                notification.message,
-            ],
-            env=base_env(),
-            timeout_s=NOTIFY_TIMEOUT_S,
-        )
+        await run_command(self.argv(notification), env=base_env(), timeout_s=NOTIFY_TIMEOUT_S)
+
+
+def build_notifier(backend: str) -> TerminalNotifierNotifier | OsascriptNotifier:
+    if backend == "terminal_notifier":
+        return TerminalNotifierNotifier(resolve_binary("terminal-notifier"))
+    return OsascriptNotifier(resolve_binary("osascript"))
 
 
 async def notify_logging_failures(notifier: Notifier, notification: Notification) -> None:

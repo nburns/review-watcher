@@ -33,12 +33,8 @@ async def _no_sleep(_: float) -> None:
     return None
 
 
-async def test_read_retries_transient_network_error(tmp_path: Path) -> None:
-    gh = _flaky_gh(
-        tmp_path,
-        failures=2,
-        stderr='Post "https://api.github.com/graphql": net/http: TLS handshake timeout',
-    )
+async def test_read_retries_failure(tmp_path: Path) -> None:
+    gh = _flaky_gh(tmp_path, failures=2, stderr="unexpected end of JSON input")
     client = GhCliGitHub(gh, sleep=_no_sleep)
 
     reviews = await client.list_reviews(make_pr(7, "h" * 40, "b" * 40))
@@ -54,15 +50,6 @@ async def test_read_gives_up_after_retries(tmp_path: Path) -> None:
     with pytest.raises(CommandFailed):
         await client.list_reviews(make_pr(7, "h" * 40, "b" * 40))
     assert _calls(tmp_path) == 3
-
-
-async def test_non_transient_error_is_not_retried(tmp_path: Path) -> None:
-    gh = _flaky_gh(tmp_path, failures=1, stderr="HTTP 404: Not Found")
-    client = GhCliGitHub(gh, sleep=_no_sleep)
-
-    with pytest.raises(CommandFailed):
-        await client.list_reviews(make_pr(7, "h" * 40, "b" * 40))
-    assert _calls(tmp_path) == 1
 
 
 async def test_write_is_never_retried(tmp_path: Path) -> None:

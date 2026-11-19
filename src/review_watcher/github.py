@@ -1,7 +1,6 @@
 import asyncio
 import json
 import logging
-import re
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -19,11 +18,6 @@ from review_watcher.proc import CommandFailed, CommandTimeout, base_env, run_com
 
 GH_TIMEOUT_S = 60.0
 RETRY_DELAYS_S: tuple[float, ...] = (2.0, 10.0)
-_TRANSIENT_GH_ERROR_RE = re.compile(
-    r"TLS handshake timeout|i/o timeout|connection reset|connection refused|no such host"
-    r"|unexpected EOF|Client\.Timeout|HTTP 50[234]",
-    re.IGNORECASE,
-)
 
 logger = logging.getLogger(__name__)
 SEARCH_PAGE_SIZE = 100
@@ -126,7 +120,7 @@ class GhCliGitHub:
                     stdin=stdin,
                 )
             except (CommandFailed, CommandTimeout) as exc:
-                if delay is None or not is_transient(exc):
+                if delay is None:
                     raise
                 logger.warning(
                     "gh_retry attempt=%d delay_s=%.0f error=%s",
@@ -308,12 +302,6 @@ class GhCliGitHub:
             ],
             retry=False,
         )
-
-
-def is_transient(exc: CommandFailed | CommandTimeout) -> bool:
-    if isinstance(exc, CommandTimeout):
-        return True
-    return _TRANSIENT_GH_ERROR_RE.search(exc.stderr) is not None
 
 
 def _raise_on_graphql_errors(data: Any, repo: str) -> None:

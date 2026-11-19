@@ -9,7 +9,7 @@ from pathlib import Path
 
 from review_watcher.logging_setup import log_step
 from review_watcher.models import PullRequestRef
-from review_watcher.proc import CommandResult, base_env, run_command
+from review_watcher.proc import CommandFailed, CommandResult, base_env, run_command
 
 GIT_TIMEOUT_S = 600.0
 _GIT_HARDENING: tuple[str, ...] = (
@@ -150,7 +150,16 @@ class RepoCache:
         try:
             yield path
         finally:
+            await self._remove_worktree(pr, path)
+
+    async def _remove_worktree(self, pr: PullRequestRef, path: Path) -> None:
+        try:
             await self._git_bare(pr, ["worktree", "remove", "--force", str(path)])
+        except CommandFailed as exc:
+            # Finder can drop a .DS_Store mid-removal, leaving git unable to rmdir.
+            logger.warning("worktree_remove_fallback pr=%s path=%s error=%s", pr.slug, path, exc)
+            await asyncio.to_thread(_rmtree_if_exists, path)
+            await self._git_bare(pr, ["worktree", "prune"])
 
     async def list_tree(self, pr: PullRequestRef) -> list[TreeEntry]:
         result = await self._git_bare(pr, ["ls-tree", "-r", "-z", "--full-tree", pr.head_sha])
@@ -320,6 +329,11 @@ class RepoCache:
             locked = any(f == "locked" or f.startswith("locked ") for f in fields)
             if path is not None and locked and Path(path).is_relative_to(self._worktree_root_real):
                 await self._git(["-C", str(bare), "worktree", "unlock", path])
+
+
+def _rmtree_if_exists(path: Path) -> None:
+    if path.exists():
+        shutil.rmtree(path)
 
 
 def _parse_tree(raw: bytes) -> list[TreeEntry]:

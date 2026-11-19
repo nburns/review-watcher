@@ -27,7 +27,7 @@ uv run poe install-agent
 
 Then grant notification permission to terminal-notifier in System Settings > Notifications. Use `uv run poe kick` to run a cycle immediately and check `var/logs/`. `uv run poe` lists all tasks.
 
-`install-agent` checks that `.venv/bin/review-watcher`, `terminal-notifier`, and SSH access to the first allowlisted repo all work, then writes `~/Library/LaunchAgents/com.nburns.review-watcher.plist` and loads it.
+`install-agent` checks that `.venv/bin/review-watcher`, `terminal-notifier`, and SSH access to the first allowlisted repo all work, then writes `~/Library/LaunchAgents/com.nburns.review-watcher.plist` and loads it. The plist runs `var/launchd/run-agent.zsh`, which checks that the virtualenv's `review-watcher` and `python` are still executable before running. If either is missing, it logs to `var/logs/launchd.err.log` and sends a "not running" notification, repeated at most hourly until `uv sync` fixes it.
 
 ## Commands
 
@@ -73,7 +73,7 @@ PRs by a login in `approval_required_authors` are not reviewed automatically. On
 
 ## Per-author daily limit
 
-`daily_review_limits` caps automatic reviews per GitHub login in any rolling 24 hours. A review counts when it starts, once per head SHA, so retries of the same head are free. Over the limit, the PR is marked `throttled` and you get one "Daily limit hit" notification for that head. A later cycle reviews it once the window has room. `review <url>` is not limited.
+`daily_review_limits` caps automatic reviews per GitHub login in any rolling 24 hours. A review counts when it starts, once per head SHA, so retries of the same head are free. Over the limit, the PR is marked `throttled` without a notification; only a `pr_throttled` log line records it. A later cycle reviews it once the window has room. `review <url>` is not limited.
 
 ## Operational context and auth
 

@@ -21,8 +21,7 @@ from review_watcher.models import PullRequestRef
 from review_watcher.notifier import (
     Notification,
     Notifier,
-    OsascriptNotifier,
-    TerminalNotifierNotifier,
+    build_notifier,
     notify_logging_failures,
     resolve_binary,
 )
@@ -114,12 +113,7 @@ async def _build_runtime(opts: Options, loaded: LoadedConfig) -> Runtime:
         await verify_claude_version(claude_binary)
         reviewer = ClaudeCliReviewer(binary=claude_binary, config=settings.reviewer)
 
-    notifier: Notifier
-    if settings.notifier.backend == "terminal_notifier":
-        notifier = TerminalNotifierNotifier(resolve_binary("terminal-notifier"))
-    else:
-        notifier = OsascriptNotifier(resolve_binary("osascript"))
-
+    notifier = build_notifier(settings.notifier.backend)
     repos = _repo_cache(loaded, git_binary)
     github = GhCliGitHub(gh_binary)
     state = StateStore(loaded.var_dir / "state.db", clock=utc_now)
@@ -394,9 +388,25 @@ def install_agent(ctx: typer.Context) -> None:
 
     asyncio.run(_ssh_check())
 
+    script_file = launchd.guard_script_path(loaded)
+    notification = Notification(
+        title="review-watcher is not running",
+        message=f"Its virtualenv is missing or broken. Run uv sync in {loaded.base_dir}",
+        group="review-watcher-agent",
+        open_url=(loaded.var_dir / "logs" / "launchd.err.log").as_uri(),
+    )
+    launchd.write_guard_script(
+        script_file,
+        launchd.build_guard_script(
+            program=program,
+            loaded=loaded,
+            notify_argv=build_notifier(settings.notifier.backend).argv(notification),
+        ),
+    )
+
     plist_file = launchd.plist_path(Path.home())
     plist = launchd.build_plist(
-        program=program,
+        script=script_file,
         loaded=loaded,
         interval_minutes=settings.interval_minutes,
         path_env=launchd.build_path_env(binaries),

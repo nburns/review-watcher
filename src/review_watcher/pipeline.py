@@ -222,7 +222,6 @@ class Pipeline:
                 self._state.save(
                     replace(record, status=ReviewStatus.THROTTLED, updated_at=self._clock())
                 )
-                await self._notify(_throttled_notification(pr))
             logger.info("pr_throttled pr=%s author=%s", pr.slug, pr.author)
             return Action.THROTTLED
         return None
@@ -537,16 +536,6 @@ def _review_notification(pr: PullRequestRef, final: FinalReview, *, dry_run: boo
         group=pr.slug,
         open_url=f"{pr.url}/files",
         subtitle=subtitle,
-    )
-
-
-def _throttled_notification(pr: PullRequestRef) -> Notification:
-    return Notification(
-        title=f"Daily limit hit: {pr.author}",
-        message=f"Skipped {pr.slug}: {pr.title}",
-        group=pr.slug,
-        open_url=pr.url,
-        subtitle="Reviewed automatically once a slot frees up",
     )
 
 

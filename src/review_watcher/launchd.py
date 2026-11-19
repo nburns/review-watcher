@@ -1,5 +1,6 @@
 import os
 import plistlib
+import shlex
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
@@ -11,6 +12,7 @@ LABEL = "com.nburns.review-watcher"
 SYSTEM_PATH_DIRS: tuple[str, ...] = ("/usr/bin", "/bin")
 LAUNCHCTL_TIMEOUT_S = 30.0
 _SERVICE_NOT_FOUND = 113
+VENV_RENOTIFY_MINUTES = 60
 
 
 def plist_path(home: Path) -> Path:
@@ -29,9 +31,43 @@ def build_path_env(binaries: Sequence[Path]) -> str:
     return ":".join(dirs)
 
 
+def guard_script_path(loaded: LoadedConfig) -> Path:
+    return loaded.var_dir / "launchd" / "run-agent.zsh"
+
+
+def build_guard_script(*, program: Path, loaded: LoadedConfig, notify_argv: Sequence[str]) -> str:
+    """launchd fails silently with EX_CONFIG when the venv is gone, so check it and notify."""
+    marker = guard_script_path(loaded).parent / "venv-missing.notified"
+    command = shlex.join([str(program), "--config", str(loaded.config_path), "run"])
+    python = program.parent / "python"
+    problem = f"{program} or its interpreter is missing; run `uv sync` in {loaded.base_dir}"
+    lines = [
+        "#!/bin/zsh",
+        "set -euo pipefail",
+        f"marker={shlex.quote(str(marker))}",
+        f"if [[ -x {shlex.quote(str(program))} && -x {shlex.quote(str(python))} ]]; then",
+        '  rm -f -- "$marker"',
+        f"  exec {command}",
+        "fi",
+        f"print -r -- {shlex.quote(f'review-watcher agent: {problem}')} >&2",
+        f'if [[ ! -e "$marker" || -n "$(find "$marker" -mmin +{VENV_RENOTIFY_MINUTES})" ]]; then',
+        f"  {shlex.join(notify_argv)} || print -r -- 'review-watcher agent: notify failed' >&2",
+        '  touch -- "$marker"',
+        "fi",
+        "exit 1",
+    ]
+    return "\n".join(lines) + "\n"
+
+
+def write_guard_script(path: Path, script: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(script, encoding="utf-8")
+    path.chmod(0o755)
+
+
 def build_plist(
     *,
-    program: Path,
+    script: Path,
     loaded: LoadedConfig,
     interval_minutes: int,
     path_env: str,
@@ -40,12 +76,7 @@ def build_plist(
     log_dir = loaded.var_dir / "logs"
     return {
         "Label": LABEL,
-        "ProgramArguments": [
-            str(program),
-            "--config",
-            str(loaded.config_path),
-            "run",
-        ],
+        "ProgramArguments": ["/bin/zsh", str(script)],
         "StartInterval": interval_minutes * 60,
         "RunAtLoad": True,
         "WorkingDirectory": str(loaded.base_dir),

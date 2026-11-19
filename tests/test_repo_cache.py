@@ -61,3 +61,13 @@ async def test_worktree_add_overrides_stale_lock(tmp_path: Path) -> None:
 
     async with stale.cache.worktree(make_pr(1, stale.head, stale.head)) as path:
         assert (path / "README.md").read_text() == "readme\n"
+
+
+async def test_worktree_cleanup_survives_failed_git_remove(tmp_path: Path) -> None:
+    stale = _stale_locked_worktree(tmp_path)
+
+    async with stale.cache.worktree(make_pr(1, stale.head, stale.head)) as path:
+        (path / ".git").unlink()
+
+    assert not path.exists()
+    assert str(path) not in git(stale.repo.bare, "worktree", "list", "--porcelain")
