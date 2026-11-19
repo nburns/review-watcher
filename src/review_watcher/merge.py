@@ -7,6 +7,7 @@ from review_watcher.models import (
     Finding,
     ReviewDraft,
     max_risk,
+    strictest_suggestion,
 )
 
 
@@ -22,13 +23,20 @@ def merge_drafts(main: ReviewDraft, lenses: Sequence[LensDraft]) -> ReviewDraft:
         for finding in lens.draft.findings:
             _add_finding(findings, finding)
     risk = main.proposed_risk
+    suggestion = main.suggestion
     for lens in lenses:
         risk = max_risk(risk, lens.draft.proposed_risk)
+        suggestion = strictest_suggestion(suggestion, lens.draft.suggestion)
     return ReviewDraft(
         summary=_join_labelled(main.summary, [(lens.name, lens.draft.summary) for lens in lenses]),
         proposed_risk=risk,
         risk_rationale=_join_labelled(
             main.risk_rationale, [(lens.name, lens.draft.risk_rationale) for lens in lenses]
+        ),
+        suggestion=suggestion,
+        suggestion_rationale=_join_labelled(
+            main.suggestion_rationale,
+            [(lens.name, lens.draft.suggestion_rationale) for lens in lenses],
         ),
         findings=findings,
         guidance_sources_used=_union(

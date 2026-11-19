@@ -11,7 +11,7 @@ from pydantic import ValidationError
 
 from review_watcher import rubric
 from review_watcher.config import ReviewerConfig
-from review_watcher.models import LensPass, ReviewContext, ReviewDraft, RiskLevel
+from review_watcher.models import LensPass, ReviewContext, ReviewDraft, RiskLevel, Suggestion
 from review_watcher.proc import base_env, run_command
 
 logger = logging.getLogger(__name__)
@@ -55,6 +55,8 @@ class NullReviewer:
             summary="",
             proposed_risk=RiskLevel.LOW,
             risk_rationale="",
+            suggestion=Suggestion.APPROVE,
+            suggestion_rationale="",
             findings=[],
             guidance_sources_used=[],
             related_sources_used=[],
@@ -70,6 +72,8 @@ class NullReviewer:
             summary="No LLM review was run (--no-llm).",
             proposed_risk=RiskLevel.LOW,
             risk_rationale="No review was performed.",
+            suggestion=Suggestion.COMMENT,
+            suggestion_rationale="No review was performed.",
             findings=[],
             guidance_sources_used=[],
             related_sources_used=[],

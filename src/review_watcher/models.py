@@ -44,6 +44,23 @@ def max_risk(first: RiskLevel, second: RiskLevel) -> RiskLevel:
     return max(first, second, key=_RISK_ORDER.index)
 
 
+class Suggestion(StrEnum):
+    APPROVE = "approve"
+    COMMENT = "comment"
+    REQUEST_CHANGES = "request_changes"
+
+
+_SUGGESTION_ORDER: tuple[Suggestion, ...] = (
+    Suggestion.APPROVE,
+    Suggestion.COMMENT,
+    Suggestion.REQUEST_CHANGES,
+)
+
+
+def strictest_suggestion(first: Suggestion, second: Suggestion) -> Suggestion:
+    return max(first, second, key=_SUGGESTION_ORDER.index)
+
+
 class Category(StrEnum):
     CORRECTNESS = "correctness"
     SECURITY = "security"
@@ -135,6 +152,8 @@ class ReviewDraft(BaseModel):
     summary: str
     proposed_risk: RiskLevel
     risk_rationale: str
+    suggestion: Suggestion
+    suggestion_rationale: str
     findings: list[Finding]
     guidance_sources_used: list[str]
     related_sources_used: list[str]
@@ -201,6 +220,7 @@ class FinalReview(BaseModel):
     risk: RiskLevel
     model_risk: RiskLevel
     floor_reasons: list[str]
+    suggestion: Suggestion
     body: str
     inline_comments: list[InlineComment]
     guidance_changes: list[GuidanceChange]

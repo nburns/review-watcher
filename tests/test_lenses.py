@@ -60,6 +60,8 @@ def test_merge_keeps_the_stronger_of_overlapping_findings() -> None:
     lens = empty_draft(
         summary="Ops view.",
         proposed_risk="high",
+        suggestion="request_changes",
+        suggestion_rationale="No timeout.",
         findings=[
             _finding("reliability", 3, "blocker", "lens strong"),
             _finding("reliability", 9, "minor", "lens separate"),
@@ -75,5 +77,7 @@ def test_merge_keeps_the_stronger_of_overlapping_findings() -> None:
         "lens separate",
     ]
     assert merged.proposed_risk == "high"
+    assert merged.suggestion == "request_changes"
+    assert merged.suggestion_rationale == "Nothing to change.\n\nsre pass: No timeout."
     assert merged.summary == "Looks fine.\n\nsre pass: Ops view."
     assert merged.questions_for_author == ["Why?", "Rollback?"]

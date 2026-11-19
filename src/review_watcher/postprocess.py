@@ -24,13 +24,26 @@ from review_watcher.models import (
     Severity,
     Side,
     StackContext,
+    Suggestion,
     Tier,
     max_risk,
+    strictest_suggestion,
 )
 
 MARKER_PREFIX = "<!-- review-watcher sha="
 BOT_PREFIX = "🤖:"
 RELOCATE_WINDOW = 20
+SUGGESTION_LABELS: dict[Suggestion, str] = {
+    Suggestion.APPROVE: "Approve",
+    Suggestion.COMMENT: "Comment",
+    Suggestion.REQUEST_CHANGES: "Request changes",
+}
+
+
+@dataclass(frozen=True)
+class _SuggestionFloor:
+    level: Suggestion
+    reason: str
 
 
 @dataclass(frozen=True)
@@ -84,12 +97,18 @@ def finalize(
     model_risk = draft.proposed_risk
     floor, reasons = _risk_floor(draft.findings, ctx, sensitive_paths)
     final_risk = max_risk(model_risk, floor)
+    suggestion_floors = _suggestion_floor(draft.findings, ctx)
+    suggestion = draft.suggestion
+    for suggestion_floor in suggestion_floors:
+        suggestion = strictest_suggestion(suggestion, suggestion_floor.level)
     body = _render_body(
         draft=draft,
         ctx=ctx,
         final_risk=final_risk,
         model_risk=model_risk,
         floor_reasons=reasons,
+        suggestion=suggestion,
+        suggestion_floors=suggestion_floors,
         general=general,
         nits=nits,
         inline_limit_hit=len(inline_candidates) > len(inline_keep),
@@ -100,6 +119,7 @@ def finalize(
         risk=final_risk,
         model_risk=model_risk,
         floor_reasons=reasons,
+        suggestion=suggestion,
         body=body,
         inline_comments=inline_comments,
         guidance_changes=list(ctx.guidance_changes.changes),
@@ -237,6 +257,41 @@ def _risk_floor(
     return level, reasons
 
 
+def _suggestion_floor(findings: Sequence[Finding], ctx: ReviewContext) -> list[_SuggestionFloor]:
+    floors: list[_SuggestionFloor] = []
+    if any(f.severity in (Severity.BLOCKER, Severity.MAJOR) for f in findings):
+        floors.append(
+            _SuggestionFloor(Suggestion.REQUEST_CHANGES, "a blocker or major finding is present")
+        )
+    if any(f.severity == Severity.MINOR for f in findings):
+        floors.append(_SuggestionFloor(Suggestion.COMMENT, "a minor finding is present"))
+    if ctx.diff_truncated:
+        floors.append(_SuggestionFloor(Suggestion.COMMENT, "the diff was not fully assessed"))
+    return floors
+
+
+def _summary_section(
+    draft: ReviewDraft, suggestion: Suggestion, floors: Sequence[_SuggestionFloor]
+) -> str:
+    header = f"**Suggested action: {SUGGESTION_LABELS[suggestion]}**"
+    if suggestion != draft.suggestion:
+        model = SUGGESTION_LABELS[draft.suggestion].lower()
+        raised = "; ".join(
+            floor.reason
+            for floor in floors
+            if strictest_suggestion(floor.level, draft.suggestion) != draft.suggestion
+        )
+        header += f" (model suggested {model}, raised by policy: {raised})"
+    return "\n\n".join(
+        [
+            "### Summary",
+            _neutralize(draft.summary),
+            header,
+            _neutralize(draft.suggestion_rationale),
+        ]
+    )
+
+
 def _tier_floor(change: GuidanceChange) -> RiskLevel:
     if change.tier == Tier.AGENT_EXECUTION_CONFIG:
         return RiskLevel.HIGH
@@ -256,6 +311,8 @@ def _render_body(
     final_risk: RiskLevel,
     model_risk: RiskLevel,
     floor_reasons: list[str],
+    suggestion: Suggestion,
+    suggestion_floors: Sequence[_SuggestionFloor],
     general: list[_Routed],
     nits: list[_Routed],
     inline_limit_hit: bool,
@@ -272,9 +329,9 @@ def _render_body(
         sections.append(_context_note(ctx.operational_context))
     if ctx.related is not None:
         sections.append(_related_note(ctx.related))
+    sections.append(_summary_section(draft, suggestion, suggestion_floors))
     sections.append(_risk_section(final_risk, model_risk, floor_reasons, draft))
     sections.append(_severity_table(draft.findings))
-    sections.append("### Summary\n\n" + _neutralize(draft.summary))
     if ctx.diff_truncated:
         sections.append(
             "> The diff exceeded the size limit and was truncated, so this change was "

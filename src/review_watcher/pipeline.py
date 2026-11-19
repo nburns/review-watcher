@@ -30,7 +30,12 @@ from review_watcher.models import (
     Tier,
 )
 from review_watcher.notifier import Notification, Notifier, notify_logging_failures
-from review_watcher.postprocess import MARKER_PREFIX, finalize, fold_inline_into_body
+from review_watcher.postprocess import (
+    MARKER_PREFIX,
+    SUGGESTION_LABELS,
+    finalize,
+    fold_inline_into_body,
+)
 from review_watcher.proc import CommandFailed, CommandTimeout
 from review_watcher.related import RelatedCollector
 from review_watcher.repo_cache import RepoCache
@@ -574,7 +579,8 @@ def _review_notification(pr: PullRequestRef, final: FinalReview, *, dry_run: boo
         prefix += "CONFIG CHANGED · "
     if dry_run:
         prefix = "(dry run) " + prefix
-    title = f"{prefix}{final.risk.value.upper()} risk: {pr.slug}"
+    action = SUGGESTION_LABELS[final.suggestion].lower()
+    title = f"{prefix}{final.risk.value.upper()} risk, {action}: {pr.slug}"
     subtitle: str | None = None
     if final.guidance_changed:
         has_agent = final.guidance_tier_max == Tier.AGENT_EXECUTION_CONFIG

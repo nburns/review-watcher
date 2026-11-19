@@ -181,3 +181,26 @@ def test_review_body_and_inline_comments_are_marked_as_bot() -> None:
     assert review.body.startswith(BOT_PREFIX)
     assert review.inline_comments
     assert all(c.body.startswith(BOT_PREFIX) for c in review.inline_comments)
+
+
+def test_summary_and_suggestion_lead_the_body() -> None:
+    review = _run(empty_draft(summary="Adds a cache.", suggestion_rationale="Looks safe."))
+
+    assert review.suggestion == "approve"
+    assert review.body.index("### Summary") < review.body.index("### Risk")
+    assert "Adds a cache.\n\n**Suggested action: Approve**\n\nLooks safe." in review.body
+
+
+def test_policy_raises_suggestion_and_names_only_the_deciding_reason() -> None:
+    findings = [
+        _finding(line=2, severity=Severity.MAJOR),
+        _finding(line=4, severity=Severity.MINOR),
+    ]
+    review = _run(empty_draft(suggestion="comment", findings=findings))
+
+    assert review.suggestion == "request_changes"
+    assert (
+        "**Suggested action: Request changes** (model suggested comment, raised by policy: "
+        "a blocker or major finding is present)" in review.body
+    )
+    assert "a minor finding is present" not in review.body

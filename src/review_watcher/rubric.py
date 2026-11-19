@@ -52,6 +52,14 @@ Risk:
 - Propose a risk level (low, medium, high, critical) with a rationale. The final risk is computed
   by the caller and may be higher than you propose.
 
+Summary and suggestion:
+- The summary is two to four sentences for the human reviewer: what the change does, whether it
+  does it correctly, and the most important thing to look at. Do not list every finding.
+- Suggest what the human reviewer should do: approve (nothing needs to change), comment (worth
+  discussing but safe to merge), or request_changes (something must change before merge). Give a
+  one or two sentence suggestion_rationale naming the deciding findings or risks. This is advice
+  only; the review is never submitted automatically, and the caller may make it stricter.
+
 Output:
 - Return only the structured result that matches the provided JSON schema.
 - Use line numbers and sides exactly as they appear in the diff. Side RIGHT is the new file,
@@ -76,6 +84,8 @@ findings and say so in one line in the summary."""
 
 LENS_OUTPUT = """\
 - Set guidance_change_assessment to null; the main pass assesses configuration changes.
+- Your summary and suggestion cover operational readiness only. Suggest approve when the change
+  has no operational concern.
 - Built-in skill files are reference material, not evidence. Never quote them or list them in
   guidance_sources_used; quotes come from this repository or a related repository."""
 

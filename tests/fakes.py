@@ -245,6 +245,8 @@ def empty_draft(**overrides: object) -> ReviewDraft:
         "summary": "Looks fine.",
         "proposed_risk": "low",
         "risk_rationale": "Small change.",
+        "suggestion": "approve",
+        "suggestion_rationale": "Nothing to change.",
         "findings": [],
         "guidance_sources_used": [],
         "related_sources_used": [],
