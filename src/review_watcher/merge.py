@@ -10,6 +10,8 @@ from review_watcher.models import (
     strictest_suggestion,
 )
 
+DUPLICATE_LINE_WINDOW = 8
+
 
 @dataclass(frozen=True)
 class LensDraft:
@@ -20,8 +22,9 @@ class LensDraft:
 def merge_drafts(main: ReviewDraft, lenses: Sequence[LensDraft]) -> ReviewDraft:
     findings = list(main.findings)
     for lens in lenses:
+        absorbed: set[int] = set()
         for finding in lens.draft.findings:
-            _add_finding(findings, finding)
+            _add_finding(findings, finding, main=main.findings, absorbed=absorbed)
     risk = main.proposed_risk
     suggestion = main.suggestion
     for lens in lenses:
@@ -52,21 +55,29 @@ def merge_drafts(main: ReviewDraft, lenses: Sequence[LensDraft]) -> ReviewDraft:
     )
 
 
-def _add_finding(findings: list[Finding], candidate: Finding) -> None:
-    for index, existing in enumerate(findings):
-        if _same_issue(existing, candidate):
-            if _strength(candidate) < _strength(existing):
+def _add_finding(
+    findings: list[Finding], candidate: Finding, *, main: Sequence[Finding], absorbed: set[int]
+) -> None:
+    # Each main finding absorbs at most one finding per lens, so a lens's own neighbours survive.
+    for index, original in enumerate(main):
+        if index not in absorbed and _same_issue(original, candidate):
+            absorbed.add(index)
+            if _strength(candidate) < _strength(findings[index]):
                 findings[index] = candidate
             return
     findings.append(candidate)
 
 
 def _same_issue(first: Finding, second: Finding) -> bool:
-    if (first.path, first.side, first.category) != (second.path, second.side, second.category):
+    # Passes label the same issue with different categories and anchor it a few lines apart.
+    if (first.path, first.side) != (second.path, second.side):
         return False
     first_start = first.line if first.start_line is None else first.start_line
     second_start = second.line if second.start_line is None else second.start_line
-    return first_start <= second.line and second_start <= first.line
+    return (
+        first_start - DUPLICATE_LINE_WINDOW <= second.line
+        and second_start - DUPLICATE_LINE_WINDOW <= first.line
+    )
 
 
 def _strength(finding: Finding) -> tuple[int, int]:

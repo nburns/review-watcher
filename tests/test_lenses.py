@@ -49,11 +49,11 @@ def _finding(category: str, line: int, severity: str, title: str) -> dict[str, o
     }
 
 
-def test_merge_keeps_the_stronger_of_overlapping_findings() -> None:
+def test_merge_keeps_the_stronger_of_nearby_cross_pass_findings() -> None:
     main = empty_draft(
         findings=[
-            _finding("reliability", 3, "minor", "main weak"),
-            _finding("correctness", 3, "major", "main other category"),
+            _finding("performance", 3, "minor", "main weak"),
+            _finding("correctness", 40, "major", "main far"),
         ],
         questions_for_author=["Why?"],
     )
@@ -63,8 +63,9 @@ def test_merge_keeps_the_stronger_of_overlapping_findings() -> None:
         suggestion="request_changes",
         suggestion_rationale="No timeout.",
         findings=[
-            _finding("reliability", 3, "blocker", "lens strong"),
-            _finding("reliability", 9, "minor", "lens separate"),
+            _finding("reliability", 8, "blocker", "lens strong"),
+            _finding("reliability", 9, "minor", "lens same pass neighbour"),
+            _finding("reliability", 20, "minor", "lens separate"),
         ],
         questions_for_author=["Why?", "Rollback?"],
     )
@@ -73,7 +74,8 @@ def test_merge_keeps_the_stronger_of_overlapping_findings() -> None:
 
     assert [f.title for f in merged.findings] == [
         "lens strong",
-        "main other category",
+        "main far",
+        "lens same pass neighbour",
         "lens separate",
     ]
     assert merged.proposed_risk == "high"
