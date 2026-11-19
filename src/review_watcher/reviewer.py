@@ -3,6 +3,7 @@ import logging
 import secrets
 import shutil
 from collections.abc import Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol, cast
 
@@ -10,7 +11,7 @@ from pydantic import ValidationError
 
 from review_watcher import rubric
 from review_watcher.config import ReviewerConfig
-from review_watcher.models import ReviewContext, ReviewDraft, RiskLevel
+from review_watcher.models import LensPass, ReviewContext, ReviewDraft, RiskLevel
 from review_watcher.proc import base_env, run_command
 
 logger = logging.getLogger(__name__)
@@ -45,8 +46,22 @@ class LockdownViolation(RuntimeError):
 class Reviewer(Protocol):
     async def review(self, ctx: ReviewContext) -> ReviewDraft: ...
 
+    async def review_lens(self, ctx: ReviewContext, lens: LensPass) -> ReviewDraft: ...
+
 
 class NullReviewer:
+    async def review_lens(self, ctx: ReviewContext, lens: LensPass) -> ReviewDraft:
+        return ReviewDraft(
+            summary="",
+            proposed_risk=RiskLevel.LOW,
+            risk_rationale="",
+            findings=[],
+            guidance_sources_used=[],
+            related_sources_used=[],
+            guidance_change_assessment=None,
+            questions_for_author=[],
+        )
+
     async def review(self, ctx: ReviewContext) -> ReviewDraft:
         assessment = None
         if ctx.guidance_changes.changes:
@@ -139,7 +154,9 @@ def assert_lockdown(argv: Sequence[str]) -> None:
             raise LockdownViolation(f"claude argv contains forbidden flag {flag}")
 
 
-def parse_review_output(stdout: bytes, ctx: ReviewContext) -> ReviewDraft:
+def parse_review_output(
+    stdout: bytes, ctx: ReviewContext, *, assess_guidance: bool = True
+) -> ReviewDraft:
     raw_text = stdout.decode("utf-8", errors="replace")
     try:
         envelope = json.loads(stdout)
@@ -162,7 +179,7 @@ def parse_review_output(stdout: bytes, ctx: ReviewContext) -> ReviewDraft:
     except ValidationError as exc:
         raise ReviewOutputInvalid(f"structured_output failed validation: {exc}") from exc
 
-    if ctx.guidance_changes.changes:
+    if assess_guidance and ctx.guidance_changes.changes:
         assessment = draft.guidance_change_assessment
         if assessment is None or not assessment.strip():
             raise ReviewOutputInvalid(
@@ -175,6 +192,19 @@ def _clip(text: str) -> str:
     return text[:_RAW_OUTPUT_LOG_LIMIT]
 
 
+@dataclass(frozen=True)
+class InlineBudget:
+    main: int
+    per_lens: int
+
+
+def split_inline_budget(total: int, lens_count: int) -> InlineBudget:
+    if lens_count == 0:
+        return InlineBudget(main=total, per_lens=0)
+    per_lens = max(1, total // (lens_count + 2))
+    return InlineBudget(main=max(1, total - per_lens * lens_count), per_lens=per_lens)
+
+
 class ClaudeCliReviewer:
     def __init__(self, *, binary: Path, config: ReviewerConfig) -> None:
         self._binary = binary
@@ -183,30 +213,59 @@ class ClaudeCliReviewer:
 
     async def review(self, ctx: ReviewContext) -> ReviewDraft:
         nonce = secrets.token_hex(8)
+        budget = split_inline_budget(ctx.max_inline_comments, len(ctx.lenses))
         system_prompt = rubric.build_system_prompt(
-            guidance=ctx.guidance,
-            head_sha=ctx.pr.head_sha,
-            nonce=nonce,
-            max_inline_comments=ctx.max_inline_comments,
-            stacked=ctx.stack is not None,
-            repo_instructions=ctx.repo_instructions,
-            has_context=bool(ctx.operational_context),
-            has_related=ctx.related is not None,
-            lenses=ctx.lenses,
+            ctx, nonce=nonce, max_inline_comments=budget.main
         )
+        return await self._run(
+            ctx,
+            nonce=nonce,
+            label="main",
+            system_prompt=system_prompt,
+            read_dirs=[],
+            assess_guidance=True,
+        )
+
+    async def review_lens(self, ctx: ReviewContext, lens: LensPass) -> ReviewDraft:
+        nonce = secrets.token_hex(8)
+        budget = split_inline_budget(ctx.max_inline_comments, len(ctx.lenses))
+        system_prompt = rubric.build_lens_system_prompt(
+            ctx, lens, nonce=nonce, max_inline_comments=budget.per_lens
+        )
+        return await self._run(
+            ctx,
+            nonce=nonce,
+            label=lens.name,
+            system_prompt=system_prompt,
+            read_dirs=lens.skill_dirs,
+            assess_guidance=False,
+        )
+
+    async def _run(
+        self,
+        ctx: ReviewContext,
+        *,
+        nonce: str,
+        label: str,
+        system_prompt: str,
+        read_dirs: Sequence[Path],
+        assess_guidance: bool,
+    ) -> ReviewDraft:
+        related_dirs = [] if ctx.related is None else ctx.related.readable_paths
         argv = build_claude_argv(
             binary=self._binary,
             config=self._config,
             schema_json=rubric.output_schema_json(),
             system_prompt=system_prompt,
-            read_dirs=[] if ctx.related is None else ctx.related.readable_paths,
+            read_dirs=[*related_dirs, *read_dirs],
         )
         assert_lockdown(argv)
         user_prompt = rubric.build_user_prompt(ctx, nonce).encode("utf-8")
         sections = " ".join(f"{k}={v}" for k, v in rubric.section_sizes(ctx, nonce).items())
         logger.info(
-            "review_prompt pr=%s system_bytes=%d user_bytes=%d %s",
+            "review_prompt pr=%s pass=%s system_bytes=%d user_bytes=%d %s",
             ctx.pr.slug,
+            label,
             len(system_prompt.encode("utf-8")),
             len(user_prompt),
             sections,
@@ -218,4 +277,4 @@ class ClaudeCliReviewer:
             cwd=ctx.worktree_path,
             stdin=user_prompt,
         )
-        return parse_review_output(result.stdout, ctx)
+        return parse_review_output(result.stdout, ctx, assess_guidance=assess_guidance)

@@ -14,6 +14,8 @@ from review_watcher.models import (
     GuidanceChange,
     GuidanceChanges,
     InlineComment,
+    LensState,
+    LensStatus,
     PullRequestRef,
     RelatedContext,
     ReviewContext,
@@ -51,6 +53,7 @@ def finalize(
     ctx: ReviewContext,
     diff: DiffMap,
     sensitive_paths: Sequence[str],
+    lens_statuses: Sequence[LensStatus],
 ) -> FinalReview:
     routed = [_Routed(finding, _place(finding, diff)) for finding in draft.findings]
     inline_candidates = [
@@ -90,6 +93,7 @@ def finalize(
         general=general,
         nits=nits,
         inline_limit_hit=len(inline_candidates) > len(inline_keep),
+        lens_statuses=lens_statuses,
     )
     return FinalReview(
         pr=ctx.pr,
@@ -255,10 +259,13 @@ def _render_body(
     general: list[_Routed],
     nits: list[_Routed],
     inline_limit_hit: bool,
+    lens_statuses: Sequence[LensStatus],
 ) -> str:
     sections: list[str] = [BOT_PREFIX]
     if ctx.guidance_changes.changes:
         sections.append(_guidance_banner(ctx.pr, ctx.guidance_changes, draft))
+    if lens_statuses:
+        sections.append(_passes_note(lens_statuses))
     if ctx.stack is not None:
         sections.append(_stack_note(ctx.pr, ctx.stack))
     if ctx.operational_context:
@@ -288,6 +295,18 @@ def _render_body(
         sections.append(f"Related sources used: {sources}")
     sections.append(f"{MARKER_PREFIX}{ctx.pr.head_sha} -->")
     return "\n\n".join(sections)
+
+
+def _passes_note(statuses: Sequence[LensStatus]) -> str:
+    items = ["`main`"]
+    for status in statuses:
+        if status.state == LensState.FAILED:
+            items.append(f"`{_cell(status.name)}` (**not assessed**: {_cell(status.detail or '')})")
+        elif status.state == LensState.SKIPPED:
+            items.append(f"`{_cell(status.name)}` (skipped: {_cell(status.detail or '')})")
+        else:
+            items.append(f"`{_cell(status.name)}`")
+    return "> Review passes: " + ", ".join(items)
 
 
 def _context_note(results: Sequence[ContextResult]) -> str:

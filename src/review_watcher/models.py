@@ -333,6 +333,29 @@ class RelatedContext(BaseModel):
         return [repo.checkout.path for repo in self.repos if repo.checkout is not None]
 
 
+class LensPass(BaseModel):
+    model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True)
+
+    name: str
+    text: str
+    skill_dirs: list[Path]
+    skills: list[SkillSummary]
+
+
+class LensState(StrEnum):
+    RAN = "ran"
+    SKIPPED = "skipped"
+    FAILED = "failed"
+
+
+class LensStatus(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    name: str
+    state: LensState
+    detail: str | None
+
+
 class ReviewContext(BaseModel):
     model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True)
 
@@ -348,4 +371,4 @@ class ReviewContext(BaseModel):
     repo_instructions: list[str]
     operational_context: list[ContextResult]
     related: RelatedContext | None
-    lenses: list[str]
+    lenses: list[LensPass]

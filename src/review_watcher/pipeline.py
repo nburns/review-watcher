@@ -15,12 +15,17 @@ from review_watcher.grounding import ground_findings
 from review_watcher.guidance import collect_guidance
 from review_watcher.guidance_changes import collect_guidance_changes
 from review_watcher.launcher import CommandLauncher
-from review_watcher.lenses import load_lens
+from review_watcher.lenses import has_runtime_change, load_lens_pass
 from review_watcher.logging_setup import log_step
+from review_watcher.merge import LensDraft, merge_drafts
 from review_watcher.models import (
     FinalReview,
+    LensPass,
+    LensState,
+    LensStatus,
     PullRequestRef,
     ReviewContext,
+    ReviewDraft,
     StackContext,
     Tier,
 )
@@ -40,12 +45,19 @@ SKIP_STATUSES = (ReviewStatus.POSTED, ReviewStatus.SKIPPED_EXISTING_PENDING)
 TIMEOUT_BACKOFF_CAP = timedelta(hours=4)
 _MAX_BACKOFF_EXPONENT = 10
 MAX_STACK_DEPTH = 10
+NO_RUNTIME_CHANGE = "docs and tests only"
 
 
 @dataclass(frozen=True)
 class _Posted:
     review_id: int
     html_url: str
+
+
+@dataclass(frozen=True)
+class _LensResult:
+    status: LensStatus
+    draft: ReviewDraft | None
 
 
 class Action(StrEnum):
@@ -317,6 +329,15 @@ class Pipeline:
             with log_step(logger, pr.slug, "stack"):
                 stacked = pr.is_stacked and not config.is_base_branch(pr.full_name, pr.base_ref)
                 stack = await self._stack_context(pr) if stacked else None
+            lens_names = config.lenses_for(pr.full_name)
+            skipped: list[LensStatus] = []
+            if lens_names and not has_runtime_change(diff.changed_files):
+                logger.info("lens_skipped pr=%s reason=no_runtime_change", pr.slug)
+                skipped = [
+                    LensStatus(name=name, state=LensState.SKIPPED, detail=NO_RUNTIME_CHANGE)
+                    for name in lens_names
+                ]
+                lens_names = []
             ctx = ReviewContext(
                 pr=pr,
                 diff_text=clipped,
@@ -330,10 +351,10 @@ class Pipeline:
                 repo_instructions=config.instructions_for(pr.full_name),
                 operational_context=operational,
                 related=related,
-                lenses=[load_lens(name) for name in config.lenses_for(pr.full_name)],
+                lenses=[load_lens_pass(name) for name in lens_names],
             )
             with log_step(logger, pr.slug, "llm"):
-                draft = await self._reviewer.review(ctx)
+                draft, lens_statuses = await self._run_passes(ctx)
             with log_step(logger, pr.slug, "grounding"):
                 draft = await ground_findings(draft, ctx, self._repos)
         return finalize(
@@ -341,7 +362,38 @@ class Pipeline:
             ctx=ctx,
             diff=diff,
             sensitive_paths=config.sensitive_paths,
+            lens_statuses=[*skipped, *lens_statuses],
         )
+
+    async def _run_passes(self, ctx: ReviewContext) -> tuple[ReviewDraft, list[LensStatus]]:
+        lens_tasks = [asyncio.create_task(self._lens_pass(ctx, lens)) for lens in ctx.lenses]
+        # Awaited directly, not in a TaskGroup, so main-pass errors keep their type for backoff.
+        try:
+            main = await self._reviewer.review(ctx)
+        except BaseException:
+            for task in lens_tasks:
+                task.cancel()
+            await asyncio.gather(*lens_tasks, return_exceptions=True)
+            raise
+        results = await asyncio.gather(*lens_tasks)
+        drafts = [
+            LensDraft(name=result.status.name, draft=result.draft)
+            for result in results
+            if result.draft is not None
+        ]
+        return merge_drafts(main, drafts), [result.status for result in results]
+
+    async def _lens_pass(self, ctx: ReviewContext, lens: LensPass) -> _LensResult:
+        try:
+            draft = await self._reviewer.review_lens(ctx, lens)
+        except Exception as exc:
+            # The main review still posts; the body marks this pass as not assessed.
+            logger.exception("lens_failed pr=%s lens=%s", ctx.pr.slug, lens.name)
+            reason = "timed out" if isinstance(exc, CommandTimeout) else "failed, see logs"
+            status = LensStatus(name=lens.name, state=LensState.FAILED, detail=reason)
+            return _LensResult(status=status, draft=None)
+        status = LensStatus(name=lens.name, state=LensState.RAN, detail=None)
+        return _LensResult(status=status, draft=draft)
 
     async def _stack_context(self, pr: PullRequestRef) -> StackContext | None:
         ancestors = await self._stack_ancestors(pr)

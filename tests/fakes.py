@@ -11,6 +11,7 @@ from review_watcher.models import (
     ContextResult,
     FeedbackItem,
     FinalReview,
+    LensPass,
     PostedReview,
     PullRequestRef,
     ReviewContext,
@@ -86,6 +87,17 @@ class FakeReviewer:
     timeout_for: set[int] = field(default_factory=set)
     hang_for: set[int] = field(default_factory=set)
     contexts: list[ReviewContext] = field(default_factory=list)
+    lens_draft: ReviewDraft | None = None
+    lens_fail_for: set[int] = field(default_factory=set)
+    lens_calls: list[str] = field(default_factory=list)
+
+    async def review_lens(self, ctx: ReviewContext, lens: LensPass) -> ReviewDraft:
+        self.lens_calls.append(lens.name)
+        if ctx.pr.number in self.lens_fail_for:
+            raise RuntimeError("lens backend exploded")
+        if self.lens_draft is None:
+            return empty_draft(summary="", risk_rationale="")
+        return self.lens_draft
 
     async def review(self, ctx: ReviewContext) -> ReviewDraft:
         self.contexts.append(ctx)

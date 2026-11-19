@@ -307,7 +307,8 @@ async def test_sre_lens_is_on_by_default_and_can_be_turned_off(tmp_path: Path) -
     )
 
     on, off = world.reviewer.contexts
-    assert len(on.lenses) == 1
-    assert on.lenses[0].startswith("Operational lens")
-    assert "<!--" not in on.lenses[0]
+    assert [lens.name for lens in on.lenses] == ["sre"]
+    assert on.lenses[0].text.startswith("Operational pass")
+    assert "<!--" not in on.lenses[0].text
+    assert world.reviewer.lens_calls == ["sre"]
     assert off.lenses == []

@@ -303,24 +303,18 @@ async def test_review_cancelled_by_run_deadline_backs_off(tmp_path: Path) -> Non
 
 
 async def test_repo_instructions_reach_the_review_prompt(tmp_path: Path) -> None:
-    world = _world(tmp_path)
+    world = _world(tmp_path, head_files={**BASE_FILES, "src/app.py": "a = 2\n"})
     config = make_config(repos=[{"name": "acme/app", "instructions": ["Check the migrations."]}])
 
     await world.pipeline(config).run()
 
     ctx = world.reviewer.contexts[0]
-    prompt = rubric.build_system_prompt(
-        guidance=ctx.guidance,
-        head_sha=ctx.pr.head_sha,
-        nonce="n",
-        max_inline_comments=ctx.max_inline_comments,
-        stacked=False,
-        repo_instructions=ctx.repo_instructions,
-        has_context=False,
-        has_related=False,
-        lenses=[],
+    prompt = rubric.build_system_prompt(ctx, nonce="n", max_inline_comments=5)
+    lens_prompt = rubric.build_lens_system_prompt(
+        ctx, ctx.lenses[0], nonce="n", max_inline_comments=2
     )
     assert "- Check the migrations." in prompt
+    assert "- Check the migrations." in lens_prompt
 
 
 async def test_reviews_wait_for_auth_and_resume_with_context_once_it_passes(
@@ -415,3 +409,69 @@ async def test_daily_limit_throttles_an_author_until_the_window_frees(tmp_path: 
     ]
     assert len(world.github.created) == 3
     assert not [n for n in world.notifier.sent if "limit" in n.title.lower()]
+
+
+def _finding(severity: str, title: str) -> dict[str, object]:
+    return {
+        "severity": severity,
+        "category": "reliability",
+        "path": "src/app.py",
+        "line": 1,
+        "side": "RIGHT",
+        "start_line": None,
+        "title": title,
+        "body": "details",
+        "evidence": "read it",
+        "quote": {"path": "src/app.py", "text": "fetch(url, timeout=None)"},
+        "confidence": "high",
+    }
+
+
+def _lens_world(tmp_path: Path, head_files: dict[str, str]) -> World:
+    world = _world(tmp_path, head_files=head_files)
+    world.reviewer.draft = empty_draft(findings=[_finding("minor", "main title")])
+    world.reviewer.lens_draft = empty_draft(
+        summary="Unbounded wait.",
+        proposed_risk="high",
+        findings=[_finding("major", "lens title")],
+    )
+    return world
+
+
+async def test_lens_pass_findings_are_merged_into_one_posted_review(tmp_path: Path) -> None:
+    world = _lens_world(tmp_path, {**BASE_FILES, "src/app.py": "fetch(url, timeout=None)\n"})
+
+    await world.pipeline(make_config()).run()
+
+    review = world.github.created[0]
+    posted = review.body + "".join(comment.body for comment in review.inline_comments)
+    assert world.reviewer.lens_calls == ["sre"]
+    assert "lens title" in posted
+    assert "main title" not in posted
+    assert "sre pass: Unbounded wait." in review.body
+    assert "> Review passes: `main`, `sre`" in review.body
+    assert review.risk == "high"
+
+
+async def test_failed_lens_pass_still_posts_the_main_review(tmp_path: Path) -> None:
+    world = _lens_world(tmp_path, {**BASE_FILES, "src/app.py": "fetch(url, timeout=None)\n"})
+    world.reviewer.lens_fail_for = {1}
+
+    summary = await world.pipeline(make_config()).run()
+
+    review = world.github.created[0]
+    posted = review.body + "".join(comment.body for comment in review.inline_comments)
+    assert summary.outcomes[0].action == Action.POSTED
+    assert "main title" in posted
+    assert "`sre` (**not assessed**: failed, see logs)" in review.body
+    assert "exploded" not in review.body
+
+
+async def test_docs_only_change_skips_the_lens_pass(tmp_path: Path) -> None:
+    world = _lens_world(tmp_path, {**BASE_FILES, "README.md": "new readme\n"})
+
+    await world.pipeline(make_config()).run()
+
+    assert world.reviewer.lens_calls == []
+    assert world.reviewer.contexts[0].lenses == []
+    assert "`sre` (skipped: docs and tests only)" in world.github.created[0].body

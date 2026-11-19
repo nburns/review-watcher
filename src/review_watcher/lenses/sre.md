@@ -6,7 +6,7 @@ skill in https://github.com/Security-Phoenix-demo/security-skills-claude-code (4
 Licences in LICENSES/. Changes: condensed and rewritten as generic
 PR-time questions for any repository; repository-specific alarms, components and docs removed.
 -->
-Operational lens (built in, applies alongside the built-in checks):
+Operational pass (built in):
 
 Judge what this change does to the running system, not only whether the code is correct.
 

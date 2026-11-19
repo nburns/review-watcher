@@ -75,6 +75,7 @@ def _run(
         ctx=ctx or _ctx(),
         diff=diff or parse_diff(DIFF_TEXT),
         sensitive_paths=["src/**"],
+        lens_statuses=[],
     )
 
 

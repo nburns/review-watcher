@@ -1,13 +1,16 @@
 import logging
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
-from typing import cast
+from importlib import resources
+from pathlib import Path
+from typing import Literal, cast
 
 import yaml
 
 from review_watcher.models import SkillSummary
 from review_watcher.repo_cache import TreeEntry
 
+SkillSetName = Literal["sre"]
 SKILLS_PREFIX = ".claude/skills/"
 SKILL_FILE = "SKILL.md"
 MAX_FRONTMATTER_BYTES = 8_000
@@ -88,3 +91,39 @@ async def summarize_skills(
             )
         )
     return summaries
+
+
+class SkillSetInvalid(RuntimeError):
+    pass
+
+
+@dataclass(frozen=True)
+class SkillSet:
+    name: SkillSetName
+    path: Path
+    skills: list[SkillSummary]
+
+
+def load_skill_set(name: SkillSetName) -> SkillSet:
+    root = Path(str(resources.files(__package__).joinpath(name)))
+    if not root.is_dir():
+        raise SkillSetInvalid(f"built-in skill set {name!r} is not a directory at {root}")
+    summaries: list[SkillSummary] = []
+    for directory in sorted(child for child in root.iterdir() if child.is_dir()):
+        skill_file = directory / SKILL_FILE
+        if not skill_file.is_file():
+            continue
+        meta = parse_frontmatter(skill_file.read_text(encoding="utf-8"))
+        if meta.name is None or meta.description is None:
+            raise SkillSetInvalid(f"{skill_file} has no name or description in its frontmatter")
+        summaries.append(
+            SkillSummary(
+                path=str(directory),
+                name=meta.name,
+                description=meta.description,
+                file_count=sum(1 for item in directory.rglob("*") if item.is_file()),
+            )
+        )
+    if not summaries:
+        raise SkillSetInvalid(f"built-in skill set {name!r} has no skills")
+    return SkillSet(name=name, path=root, skills=summaries)

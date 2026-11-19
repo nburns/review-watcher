@@ -29,7 +29,8 @@ All four checks must pass clean before a change is done. Do not run `poe kick`, 
 ## Invariants
 
 - The LLM is used only in `reviewer.py`. An AST test enforces that no other module references the `claude` binary.
-- The `claude` argv must keep every lockdown flag and must never contain `--bare`. `assert_lockdown` enforces this at call time.
+- The `claude` argv must keep every lockdown flag and must never contain `--bare`. `assert_lockdown` enforces this at call time, for the main pass and every lens pass.
+- Lens passes read vendored skills in `src/review_watcher/skills/<set>/` only through `--add-dir`. Their findings merge into the main draft before grounding, so grounding and posting rules apply unchanged. A lens pass failure never blocks the main review.
 - Git calls on repo content go through `RepoCache._git`, which applies the hardening `-c` flags and `GIT_LFS_SKIP_SMUDGE=1`.
 - A finding is posted only if its quote is verified in git objects by `grounding.py`; otherwise it becomes a question.
 - Only `FinalReview` is posted to GitHub, and the posted review has no `event` field, so it stays PENDING.
